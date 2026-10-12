@@ -16,9 +16,10 @@
 #    so auto-promotions learnt here are never overwritten.
 # 3. Replaces the installed .app and quits the running input method; macOS
 #    starts the new one, with the new data, when it is next used.
-#
-# First install: log out and back in, then add "Square Input" in System
-# Settings > Keyboard > Input Sources (Chinese, Traditional).
+# 4. Registers and enables the input source (squareinput-imk --register), so
+#    there is no need to log out; a first install also switches to it. If
+#    that fails, log out and back in, then add "Square Input" in System
+#    Settings > Keyboard > Input Sources (Chinese, Traditional).
 # Errors go to ~/Library/Logs/squareinput/squareinput.log.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -81,3 +82,16 @@ rm -rf "$INSTALL_DIR/$APP_NAME.app"
 cp -R "$app" "$INSTALL_DIR/"
 killall "$BIN" 2>/dev/null || true
 echo "installed $INSTALL_DIR/$APP_NAME.app"
+
+# Register the input source and enable it, so a first install needs no
+# logging out; on a first install it also becomes the current input source.
+# Open applications reload the input source list from these caches, and
+# switching to a newly registered input method can crash them; drop them so
+# they rebuild it.
+cache="$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null || true)"
+if [[ -n "$cache" ]]; then
+    rm -f "$cache"com.apple.IntlDataCache.le* "$cache"*/com.apple.IntlDataCache.le* 2>/dev/null || true
+fi
+if ! "$INSTALL_DIR/$APP_NAME.app/Contents/MacOS/$BIN" --register; then
+    echo "could not register the input source: log out and back in, then add Square Input in System Settings > Keyboard > Input Sources" >&2
+fi

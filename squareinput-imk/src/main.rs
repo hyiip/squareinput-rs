@@ -8,6 +8,8 @@
 #[cfg(target_os = "macos")]
 mod controller;
 #[cfg(target_os = "macos")]
+mod register;
+#[cfg(target_os = "macos")]
 mod window;
 
 #[cfg(not(target_os = "macos"))]
@@ -22,6 +24,14 @@ fn main() {
     use objc2_foundation::{NSBundle, NSString};
     use objc2_input_method_kit::IMKServer;
     use squareinput::store;
+
+    // Run by the install script rather than by the system: register the input source and quit.
+    let mut args = std::env::args().skip(1);
+    match args.next().as_deref() {
+        Some("--register") => std::process::exit(register::register()),
+        Some(register::FINISH_FLAG) => std::process::exit(register::finish(args.next(), args.next())),
+        _ => {}
+    }
 
     let Some(mtm) = MainThreadMarker::new() else {
         store::log("not started on the main thread");

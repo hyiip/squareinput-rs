@@ -24,14 +24,15 @@ scripts/install-macos.sh
 
 The script builds a universal app, signs it ad hoc, installs it into
 `~/Library/Input Methods` and copies the tables from `tsv/` into
-`~/Library/Application Support/squareinput`.
+`~/Library/Application Support/squareinput`. It then registers and enables
+the input source, so there is no need to log out. On a first install it also
+switches to Square Input; later, switch with the input menu in the menu bar.
 
-The first time:
+If the script says it could not register the input source, add it by hand:
 
 1. Log out and log back in.
 2. Open System Settings > Keyboard > Input Sources > Edit, press +, choose
    Chinese, Traditional, then Square Input, and add it.
-3. Switch to it from the input menu in the menu bar.
 
 To update, run `git pull` and then `scripts/install-macos.sh` again. If only
 the tables changed, `scripts/install-macos.sh --data-only` is enough.
