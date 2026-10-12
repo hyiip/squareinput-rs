@@ -1,0 +1,4 @@
+# Byte-exact: a PDF's xref holds byte offsets.
+*.pdf binary
+# Shell scripts run on macOS and Linux.
+*.sh text eol=lf
