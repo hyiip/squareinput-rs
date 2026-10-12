@@ -333,7 +333,9 @@ impl Engine {
         };
         match &self.state {
             S::Idle => {
-                v.cells = if self.fresh { features } else { fixed(COMMON_CHARS) };
+                // COMMON_CHARS could stand here once something has been typed; the
+                // user prefers the features, which say what 1-9 will do.
+                v.cells = features;
                 v.zero_label = if self.fresh { "標　點" } else { "選　字" };
                 v.dot_label = "標點";
                 v.hints = if self.armed {
@@ -528,9 +530,12 @@ mod tests {
         type_keys(&mut e, "0");
         assert_eq!(e.view().screen, Screen::Punctuation);
         type_keys(&mut e, ".");
-        assert_eq!(e.view().cells[6], Cell::Text("你".into()));
+        // The idle grid keeps showing the features after typing.
+        assert_eq!(e.view().cells[6], Cell::Feature(7));
+        assert_eq!(e.view().zero_label, "選　字");
         type_keys(&mut e, "0");
         assert_eq!(e.view().screen, Screen::Common);
+        assert_eq!(e.view().cells[6], Cell::Text("你".into()));
         assert_eq!(type_keys(&mut e, "7"), "你");
     }
 

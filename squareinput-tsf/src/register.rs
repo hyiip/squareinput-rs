@@ -12,11 +12,17 @@ use windows::core::*;
 
 use crate::{CLSID_TEXT_SERVICE, DESCRIPTION, GUID_PROFILE, LANGID};
 
-/// TSF categories we register under. UIELEMENTENABLED is needed for hosts that
-/// run their thread manager UI-less (TF_TMAE_UIELEMENTENABLEDONLY): they
-/// silently skip text services without it, and Win+Space then appears to do
-/// nothing. We keep drawing our own window there.
-const CATEGORIES: [GUID; 2] = [GUID_TFCAT_TIP_KEYBOARD, GUID_TFCAT_TIPCAP_UIELEMENTENABLED];
+/// TSF categories we register under.
+///
+/// - UIELEMENTENABLED: hosts that run their thread manager UI-less
+///   (TF_TMAE_UIELEMENTENABLEDONLY) silently skip text services without it.
+///   We keep drawing our own window there.
+/// - IMMERSIVESUPPORT: text input through TextInputFramework (Windows
+///   Terminal, Store apps) only cycles to text services declaring it; without
+///   it Win+Space skips straight past us. In app containers the data under
+///   %APPDATA% is unreadable, so there the service stays inert.
+const CATEGORIES: [GUID; 3] =
+    [GUID_TFCAT_TIP_KEYBOARD, GUID_TFCAT_TIPCAP_UIELEMENTENABLED, GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT];
 
 fn clsid_key() -> String {
     format!("CLSID\\{{{CLSID_TEXT_SERVICE:?}}}")
