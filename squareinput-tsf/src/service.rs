@@ -1,5 +1,6 @@
 //! The TSF text service: takes numpad keys, runs them through the engine,
-//! inserts committed text and keeps the candidate window in step.
+//! inserts committed text and keeps the candidate window in step. The COM
+//! objects are declared in `sys`; their interface methods are here.
 //!
 //! Every COM method body runs under `guard`, so a panic can never unwind into
 //! the host application. No `RefCell` borrow is held while calling into TSF,
@@ -8,7 +9,6 @@
 
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::mem::ManuallyDrop;
 
 use squareinput::{Engine, Key};
 use windows::Win32::Foundation::*;
@@ -16,6 +16,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::TextServices::*;
 use windows::core::*;
 
+use crate::sys::{self, CommitSession, CommitSession_Impl, TextService, TextService_Impl};
 use crate::window::{CandidateWindow, Content};
 use crate::{data, guard};
 
@@ -42,11 +43,11 @@ fn pad_key(vk: u16) -> Option<Pad> {
 }
 
 fn chord_held() -> bool {
-    [VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN].iter().any(|k| unsafe { GetKeyState(k.0 as i32) } < 0)
+    [VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN].into_iter().any(sys::key_held)
 }
 
 #[derive(Default)]
-struct State {
+pub(crate) struct State {
     thread_mgr: Option<ITfThreadMgr>,
     client_id: u32,
     sink_cookies: Vec<u32>,
@@ -113,11 +114,6 @@ impl State {
     }
 }
 
-#[implement(ITfTextInputProcessorEx, ITfKeyEventSink, ITfThreadMgrEventSink, ITfThreadFocusSink)]
-pub struct TextService {
-    state: RefCell<State>,
-}
-
 impl TextService {
     pub fn new() -> TextService {
         TextService { state: RefCell::default() }
@@ -138,14 +134,12 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         guard(Ok(()), || {
             let taken = self.with(|s| (s.thread_mgr.take(), s.client_id, std::mem::take(&mut s.sink_cookies)));
             if let Some((Some(tm), tid, cookies)) = taken {
-                unsafe {
-                    if let Ok(ksm) = tm.cast::<ITfKeystrokeMgr>() {
-                        let _ = ksm.UnadviseKeyEventSink(tid);
-                    }
-                    if let Ok(source) = tm.cast::<ITfSource>() {
-                        for cookie in cookies {
-                            let _ = source.UnadviseSink(cookie);
-                        }
+                if let Ok(keystrokes) = tm.cast::<ITfKeystrokeMgr>() {
+                    sys::unadvise_key_sink(&keystrokes, tid);
+                }
+                if let Ok(source) = tm.cast::<ITfSource>() {
+                    for cookie in cookies {
+                        sys::unadvise_sink(&source, cookie);
                     }
                 }
             }
@@ -180,16 +174,12 @@ impl TextService_Impl {
             s.thread_focus = true;
         });
         let source: ITfSource = tm.cast()?;
-        let mut cookies = Vec::new();
-        unsafe {
-            let sink: ITfThreadMgrEventSink = self.to_interface();
-            cookies.push(source.AdviseSink(&ITfThreadMgrEventSink::IID, &sink)?);
-            let sink: ITfThreadFocusSink = self.to_interface();
-            cookies.push(source.AdviseSink(&ITfThreadFocusSink::IID, &sink)?);
-            let sink: ITfKeyEventSink = self.to_interface();
-            tm.cast::<ITfKeystrokeMgr>()?.AdviseKeyEventSink(tid, &sink, true)?;
-        }
-        let doc_focus = unsafe { tm.GetFocus() }.is_ok();
+        let cookies = vec![
+            sys::advise_sink(&source, &self.to_interface::<ITfThreadMgrEventSink>())?,
+            sys::advise_sink(&source, &self.to_interface::<ITfThreadFocusSink>())?,
+        ];
+        sys::advise_key_sink(&tm.cast()?, tid, &self.to_interface())?;
+        let doc_focus = sys::has_focus_document(&tm);
         self.with(|s| {
             s.sink_cookies = cookies;
             s.doc_focus = doc_focus;
@@ -325,48 +315,15 @@ impl ITfThreadFocusSink_Impl for TextService_Impl {
 
 fn commit_text(context: &ITfContext, tid: u32, text: &str) {
     let session: ITfEditSession = CommitSession { context: context.clone(), text: text.encode_utf16().collect() }.into();
-    match unsafe { context.RequestEditSession(tid, &session, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE) } {
+    match sys::request_edit_session(context, tid, &session) {
         Ok(hr) if hr.is_ok() => {}
         Ok(hr) => data::log(&format!("edit session failed: {hr:?}")),
         Err(e) => data::log(&format!("cannot request an edit session: {e}")),
     }
 }
 
-/// Inserts committed text at the selection, as a composition that ends at
-/// once (applications that only understand IME compositions need that), and
-/// leaves the caret after it.
-#[implement(ITfEditSession)]
-struct CommitSession {
-    context: ITfContext,
-    text: Vec<u16>,
-}
-
 impl ITfEditSession_Impl for CommitSession_Impl {
     fn DoEditSession(&self, ec: u32) -> Result<()> {
-        guard(Err(E_UNEXPECTED.into()), || unsafe {
-            let insert: ITfInsertAtSelection = self.context.cast()?;
-            let range = insert.InsertTextAtSelection(ec, TF_IAS_QUERYONLY, &[])?;
-            let composition = self
-                .context
-                .cast::<ITfContextComposition>()
-                .and_then(|c| c.StartComposition(ec, &range, None::<&ITfCompositionSink>));
-            let target = match &composition {
-                Ok(c) => c.GetRange()?,
-                Err(_) => range,
-            };
-            target.SetText(ec, 0, &self.text)?;
-            let caret = target.Clone()?;
-            caret.Collapse(ec, TF_ANCHOR_END)?;
-            let selection = TF_SELECTION {
-                range: ManuallyDrop::new(Some(caret)),
-                style: TF_SELECTIONSTYLE { ase: TF_AE_NONE, fInterimChar: FALSE },
-            };
-            let set = self.context.SetSelection(ec, std::slice::from_ref(&selection));
-            drop(ManuallyDrop::into_inner(selection.range));
-            if let Ok(c) = composition {
-                c.EndComposition(ec)?;
-            }
-            set
-        })
+        guard(Err(E_UNEXPECTED.into()), || sys::insert_text(&self.context, ec, &self.text))
     }
 }

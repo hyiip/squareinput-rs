@@ -7,19 +7,15 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use squareinput::{Cell, View};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::*;
 
 use crate::labels::{COMPONENTS, FEATURES};
-
-const CLASS: PCWSTR = w!("squareinput-candidates");
+use crate::sys::{self, Canvas};
 
 // Layout in 96-dpi pixels.
 const PAD: i32 = 6;
@@ -36,6 +32,11 @@ const BORDER: COLORREF = COLORREF(0x00C8_C0BA);
 const INK: COLORREF = COLORREF(0x0020_2020);
 const MUTED: COLORREF = COLORREF(0x0070_6A66);
 const ACCENT: COLORREF = COLORREF(0x00B0_5A1E);
+
+const HAN_FONT: &str = "MingLiU_HKSCS";
+const UI_FONT: &str = "Microsoft JhengHei UI";
+const CENTERED: DRAW_TEXT_FORMAT = DRAW_TEXT_FORMAT(DT_CENTER.0 | DT_VCENTER.0 | DT_SINGLELINE.0);
+const LEFT: DRAW_TEXT_FORMAT = DRAW_TEXT_FORMAT(DT_LEFT.0 | DT_VCENTER.0 | DT_SINGLELINE.0 | DT_END_ELLIPSIS.0);
 
 /// What to draw.
 pub struct Content {
@@ -71,68 +72,46 @@ pub fn toggle_corner() {
     crate::data::write_setting(CORNER_SETTING, if top { "top" } else { "bottom" });
 }
 
-pub struct CandidateWindow {
-    hwnd: HWND,
-}
-
-fn register_class() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| unsafe {
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(wndproc),
-            hInstance: crate::module().into(),
-            lpszClassName: CLASS,
-            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-            ..Default::default()
-        };
-        RegisterClassW(&wc);
-    });
-}
-
-unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    unsafe {
-        match msg {
-            WM_PAINT => {
-                let painted = crate::guard(false, || {
-                    let mut ps = PAINTSTRUCT::default();
-                    let hdc = BeginPaint(hwnd, &mut ps);
+extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    match msg {
+        WM_PAINT => {
+            let painted = crate::guard(false, || {
+                sys::paint_buffered(hwnd, |canvas| {
                     CONTENT.with(|c| {
-                        if let Ok(map) = c.try_borrow()
-                            && let Some(content) = map.get(&key(hwnd))
-                        {
-                            paint(hwnd, hdc, content);
-                        }
-                    });
-                    let _ = EndPaint(hwnd, &ps);
-                    true
+                        let Ok(map) = c.try_borrow() else { return false };
+                        let Some(content) = map.get(&key(hwnd)) else { return false };
+                        draw(&Painter { canvas }, content);
+                        true
+                    })
                 });
-                if !painted {
-                    let _ = ValidateRect(Some(hwnd), None);
-                }
-                LRESULT(0)
+                true
+            });
+            if !painted {
+                sys::validate(hwnd);
             }
-            WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
-            WM_NCDESTROY => {
-                CONTENT.with(|c| {
-                    if let Ok(mut map) = c.try_borrow_mut() {
-                        map.remove(&key(hwnd));
-                    }
-                });
-                DefWindowProcW(hwnd, msg, wp, lp)
-            }
-            _ => DefWindowProcW(hwnd, msg, wp, lp),
+            LRESULT(0)
         }
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_NCDESTROY => {
+            CONTENT.with(|c| {
+                if let Ok(mut map) = c.try_borrow_mut() {
+                    map.remove(&key(hwnd));
+                }
+            });
+            sys::default_window_proc(hwnd, msg, wp, lp)
+        }
+        _ => sys::default_window_proc(hwnd, msg, wp, lp),
     }
 }
 
-struct Painter {
-    hdc: HDC,
-    scale: f32,
+/// Draws in 96-dpi layout units on a canvas.
+struct Painter<'a> {
+    canvas: &'a Canvas,
 }
 
-impl Painter {
+impl Painter<'_> {
     fn px(&self, v: i32) -> i32 {
-        (v as f32 * self.scale).round() as i32
+        (v as f32 * self.canvas.scale).round() as i32
     }
 
     fn rect(&self, x: i32, y: i32, w: i32, h: i32) -> RECT {
@@ -140,45 +119,17 @@ impl Painter {
     }
 
     fn fill(&self, r: &RECT, color: COLORREF) {
-        unsafe {
-            let brush = CreateSolidBrush(color);
-            FillRect(self.hdc, r, brush);
-            let _ = DeleteObject(brush.into());
-        }
+        self.canvas.fill(r, color);
     }
 
     fn frame(&self, r: &RECT, color: COLORREF) {
-        unsafe {
-            let brush = CreateSolidBrush(color);
-            FrameRect(self.hdc, r, brush);
-            let _ = DeleteObject(brush.into());
-        }
+        self.canvas.frame(r, color);
     }
 
-    fn text(&self, text: &str, r: &RECT, size: i32, face: PCWSTR, color: COLORREF, format: DRAW_TEXT_FORMAT) {
-        if text.is_empty() {
-            return;
-        }
-        unsafe {
-            let font = CreateFontW(
-                -self.px(size), 0, 0, 0, FW_NORMAL.0 as i32, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32, face,
-            );
-            let old = SelectObject(self.hdc, font.into());
-            SetTextColor(self.hdc, color);
-            let mut buf: Vec<u16> = text.encode_utf16().collect();
-            let mut r = *r;
-            DrawTextW(self.hdc, &mut buf, &mut r, format | DT_NOPREFIX);
-            SelectObject(self.hdc, old);
-            let _ = DeleteObject(font.into());
-        }
+    fn text(&self, text: &str, r: &RECT, size: i32, face: &str, color: COLORREF, format: DRAW_TEXT_FORMAT) {
+        self.canvas.text(text, r, self.px(size), face, color, format);
     }
 }
-
-const HAN_FONT: PCWSTR = w!("MingLiU_HKSCS");
-const UI_FONT: PCWSTR = w!("Microsoft JhengHei UI");
-const CENTERED: DRAW_TEXT_FORMAT = DRAW_TEXT_FORMAT(DT_CENTER.0 | DT_VCENTER.0 | DT_SINGLELINE.0);
-const LEFT: DRAW_TEXT_FORMAT = DRAW_TEXT_FORMAT(DT_LEFT.0 | DT_VCENTER.0 | DT_SINGLELINE.0 | DT_END_ELLIPSIS.0);
 
 fn draw(p: &Painter, content: &Content) {
     let v = &content.view;
@@ -237,46 +188,17 @@ fn draw(p: &Painter, content: &Content) {
     p.text(&status.join("　"), &line(2), 12, UI_FONT, ACCENT, LEFT);
 }
 
-fn paint(hwnd: HWND, hdc: HDC, content: &Content) {
-    unsafe {
-        let mut rc = RECT::default();
-        let _ = GetClientRect(hwnd, &mut rc);
-        let (w, h) = (rc.right, rc.bottom);
-        // Draw off-screen and copy in one go, so the grid never flickers.
-        let mem = CreateCompatibleDC(Some(hdc));
-        let bmp = CreateCompatibleBitmap(hdc, w, h);
-        let old = SelectObject(mem, bmp.into());
-        SetBkMode(mem, TRANSPARENT);
-        draw(&Painter { hdc: mem, scale: GetDpiForWindow(hwnd).max(96) as f32 / 96.0 }, content);
-        let _ = BitBlt(hdc, 0, 0, w, h, Some(mem), 0, 0, SRCCOPY);
-        SelectObject(mem, old);
-        let _ = DeleteObject(bmp.into());
-        let _ = DeleteDC(mem);
-    }
+pub struct CandidateWindow {
+    hwnd: HWND,
 }
 
 impl CandidateWindow {
     pub fn new() -> Option<CandidateWindow> {
-        register_class();
-        unsafe {
-            let hwnd = CreateWindowExW(
-                WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
-                CLASS,
-                w!("squareinput"),
-                WS_POPUP,
-                0,
-                0,
-                WIDTH,
-                HEIGHT,
-                None,
-                None,
-                Some(crate::module().into()),
-                None,
-            )
+        sys::register_window_class(wndproc);
+        let hwnd = sys::create_popup("squareinput", WIDTH, HEIGHT)
             .inspect_err(|e| crate::data::log(&format!("cannot create the candidate window: {e}")))
             .ok()?;
-            Some(CandidateWindow { hwnd })
-        }
+        Some(CandidateWindow { hwnd })
     }
 
     /// Show `content` in the chosen corner of the monitor the user is typing on.
@@ -286,43 +208,26 @@ impl CandidateWindow {
                 map.insert(key(self.hwnd), content);
             }
         });
-        unsafe {
-            if !IsWindowVisible(self.hwnd).as_bool() {
-                load_corner();
-            }
-            let monitor = MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTONEAREST);
-            let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-            if GetMonitorInfoW(monitor, &mut info).as_bool() {
-                let scale = GetDpiForWindow(self.hwnd).max(96) as f32 / 96.0;
-                let px = |v: i32| (v as f32 * scale).round() as i32;
-                let work = info.rcWork;
-                let (w, h) = (px(WIDTH), px(HEIGHT));
-                let y = if AT_TOP.load(Ordering::Relaxed) { work.top + px(MARGIN) } else { work.bottom - h - px(MARGIN) };
-                let _ = SetWindowPos(
-                    self.hwnd,
-                    Some(HWND_TOPMOST),
-                    work.right - w - px(MARGIN),
-                    y,
-                    w,
-                    h,
-                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                );
-            }
-            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        if !sys::is_visible(self.hwnd) {
+            load_corner();
         }
+        if let Some(work) = sys::foreground_work_area() {
+            let scale = sys::dpi_scale(self.hwnd);
+            let px = |v: i32| (v as f32 * scale).round() as i32;
+            let (w, h) = (px(WIDTH), px(HEIGHT));
+            let y = if AT_TOP.load(Ordering::Relaxed) { work.top + px(MARGIN) } else { work.bottom - h - px(MARGIN) };
+            sys::place_topmost(self.hwnd, work.right - w - px(MARGIN), y, w, h);
+        }
+        sys::invalidate(self.hwnd);
     }
 
     pub fn hide(&self) {
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_HIDE);
-        }
+        sys::hide(self.hwnd);
     }
 }
 
 impl Drop for CandidateWindow {
     fn drop(&mut self) {
-        unsafe {
-            let _ = DestroyWindow(self.hwnd);
-        }
+        sys::destroy(self.hwnd);
     }
 }
