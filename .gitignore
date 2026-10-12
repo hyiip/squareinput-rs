@@ -1,0 +1,4 @@
+/target
+# Manuals, backups and harvested tables are third-party material: keep local, never commit.
+/local
+/dist

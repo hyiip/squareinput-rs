@@ -1,0 +1,7 @@
+[package]
+name = "squareinput"
+version = "0.1.0"
+edition = "2024"
+description = "Platform-independent core of a 字形 input method"
+
+[dependencies]
