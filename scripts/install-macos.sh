@@ -1,12 +1,14 @@
 #!/bin/bash
 # Build Square Input for macOS and install it into ~/Library/Input Methods.
 #
-#   scripts/install-macos.sh              build, refresh the data, install
-#   scripts/install-macos.sh --data-only  only refresh the data
+#   scripts/install-macos.sh                build, refresh the data, install
+#   scripts/install-macos.sh --data-only    only refresh the data
+#   scripts/install-macos.sh --bundle-only  only build the .app, in target/macos
 #
 # 1. Builds squareinput-imk for Apple silicon and Intel and joins them with
 #    lipo, bundles the .app (Info.plist, menu icon) and signs it ad hoc:
-#    Apple silicon only loads signed code.
+#    Apple silicon only loads signed code. A release ships the .app prebuilt
+#    in bin/ and is not built, so it needs neither Rust nor Xcode.
 # 2. Refreshes the data directory (~/Library/Application Support/squareinput,
 #    or $SQUAREINPUT_DATA). Where local/ holds the harvested tables they are
 #    rebuilt with squareinput-data. Elsewhere they are copied from tsv/:
@@ -49,37 +51,55 @@ install_data() {
     fi
 }
 
-if [[ "${1:-}" == "--data-only" ]]; then
+build_app() {
+    local binaries=() target
+    for target in "${TARGETS[@]}"; do
+        rustup target add "$target" >/dev/null
+        cargo build --release -p "$BIN" --target "$target"
+        binaries+=("target/$target/release/$BIN")
+    done
+
+    app="target/macos/$APP_NAME.app"
+    rm -rf "$app"
+    mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+    lipo -create -output "$app/Contents/MacOS/$BIN" "${binaries[@]}"
+    cp squareinput-imk/Info.plist "$app/Contents/Info.plist"
+    cp squareinput-imk/resources/menu.pdf "$app/Contents/Resources/"
+    # Display names, including the input mode's, keyed by its ID.
+    cp -R squareinput-imk/resources/*.lproj "$app/Contents/Resources/"
+    # Extended attributes (e.g. from iCloud folders) make codesign refuse the bundle.
+    xattr -cr "$app"
+    codesign --force --deep --sign - "$app"
+}
+
+case "${1:-}" in
+--data-only)
     install_data
     # The input method reads the tables once; restart it to pick them up.
     killall "$BIN" 2>/dev/null || true
     exit 0
+    ;;
+--bundle-only)
+    build_app
+    echo "built $app"
+    exit 0
+    ;;
+esac
+
+if [[ -d "bin/$APP_NAME.app" ]]; then
+    app="bin/$APP_NAME.app"
+else
+    build_app
 fi
-
-binaries=()
-for target in "${TARGETS[@]}"; do
-    rustup target add "$target" >/dev/null
-    cargo build --release -p "$BIN" --target "$target"
-    binaries+=("target/$target/release/$BIN")
-done
-
-app="target/macos/$APP_NAME.app"
-rm -rf "$app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-lipo -create -output "$app/Contents/MacOS/$BIN" "${binaries[@]}"
-cp squareinput-imk/Info.plist "$app/Contents/Info.plist"
-cp squareinput-imk/resources/menu.pdf "$app/Contents/Resources/"
-# Display names, including the input mode's, keyed by its ID.
-cp -R squareinput-imk/resources/*.lproj "$app/Contents/Resources/"
-# Extended attributes (e.g. from iCloud folders) make codesign refuse the bundle.
-xattr -cr "$app"
-codesign --force --deep --sign - "$app"
 
 install_data
 
 mkdir -p "$INSTALL_DIR"
 rm -rf "$INSTALL_DIR/$APP_NAME.app"
 cp -R "$app" "$INSTALL_DIR/"
+# A downloaded release is quarantined, and macOS will not run an ad hoc
+# signed app that is.
+xattr -cr "$INSTALL_DIR/$APP_NAME.app"
 killall "$BIN" 2>/dev/null || true
 echo "installed $INSTALL_DIR/$APP_NAME.app"
 

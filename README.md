@@ -13,6 +13,21 @@ Windows (TSF) and macOS (InputMethodKit), written in Rust.
 
 ## Install on macOS
 
+### From a release
+
+Download `squareinput-macos.zip` from the repository's Releases page and
+unzip it. This needs neither Rust nor Xcode. In Terminal:
+
+```sh
+cd ~/Downloads/squareinput-macos
+bash scripts/install-macos.sh
+```
+
+The script installs the prebuilt app and the tables, as below. The unzipped
+folder can be deleted afterwards.
+
+### From source
+
 You need the Xcode command-line tools (`xcode-select --install`) and Rust
 (<https://rustup.rs>).
 
@@ -40,6 +55,19 @@ the tables changed, `scripts/install-macos.sh --data-only` is enough.
 Errors go to `~/Library/Logs/squareinput/squareinput.log`.
 
 ## Install on Windows
+
+### From a release
+
+Download `squareinput-windows.zip` from the repository's Releases page and
+unzip it. This needs neither Rust nor Visual Studio. Double-click
+`scripts\install.cmd`; if Windows warns that the file came from the internet,
+let it run.
+
+It installs the DLLs into `%LOCALAPPDATA%\Programs\squareinput` and otherwise
+works as below, so the unzipped folder can be deleted afterwards. To update,
+run `install.cmd` from a newer release. `scripts\uninstall.cmd` removes it.
+
+### From source
 
 You need Rust with the MSVC toolchain and Visual Studio Build Tools, plus the
 32-bit target: `rustup target add i686-pc-windows-msvc`.
@@ -101,3 +129,17 @@ cargo clippy --workspace --all-targets
 The tests against the real tables are skipped when `local/` is missing.
 `squareinput-tsf` builds only on Windows and `squareinput-imk` only on macOS;
 elsewhere they are empty, so the workspace builds on every platform.
+
+## Releases
+
+Pushing a tag such as `v0.1.0` runs `.github/workflows/release.yml`. It
+builds both platforms and publishes `squareinput-windows.zip` and
+`squareinput-macos.zip` as a release with that name:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Running the workflow by hand from the Actions tab only builds the zips; they
+appear as artifacts on the run's page.

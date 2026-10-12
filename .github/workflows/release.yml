@@ -1,0 +1,69 @@
+# Builds Square Input for Windows and macOS, so that installing it needs
+# neither Rust nor a C toolchain. Pushing a tag v* also publishes the zips as
+# a GitHub release; running it by hand (Actions > release > Run workflow)
+# only builds them, as artifacts on the run's page.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup target add i686-pc-windows-msvc
+      - run: cargo build --locked --release -p squareinput-tsf --target x86_64-pc-windows-msvc
+      - run: cargo build --locked --release -p squareinput-tsf --target i686-pc-windows-msvc
+      - name: Package
+        run: |
+          $stage = 'squareinput-windows'
+          New-Item -ItemType Directory "$stage\bin", "$stage\scripts" | Out-Null
+          Copy-Item target\x86_64-pc-windows-msvc\release\squareinput_tsf.dll "$stage\bin\squareinput.dll"
+          Copy-Item target\i686-pc-windows-msvc\release\squareinput_tsf.dll "$stage\bin\squareinput32.dll"
+          # .cargo/config.toml links the C runtime statically; make sure it did.
+          if (Select-String "$stage\bin\*.dll" -Pattern 'vcruntime' -Quiet) {
+              throw 'the DLLs need the Visual C++ Redistributable'
+          }
+          Copy-Item scripts\*.ps1, scripts\*.cmd "$stage\scripts"
+          Copy-Item -Recurse tsv, README.md $stage
+          Compress-Archive $stage squareinput-windows.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: squareinput-windows.zip
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: scripts/install-macos.sh --bundle-only
+      - name: Package
+        run: |
+          stage=squareinput-macos
+          mkdir -p "$stage/bin" "$stage/scripts"
+          cp -R "target/macos/Square Input.app" "$stage/bin/"
+          cp scripts/install-macos.sh "$stage/scripts/"
+          cp -R tsv README.md "$stage/"
+          ditto -c -k --keepParent "$stage" squareinput-macos.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          path: squareinput-macos.zip
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+      - run: gh release create "$GITHUB_REF_NAME" windows/*.zip macos/*.zip --repo "$GITHUB_REPOSITORY" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

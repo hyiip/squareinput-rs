@@ -10,8 +10,12 @@
      tables come from tsv\. The auto-promotion log is made by typing on each
      machine; a promotions.tsv put in tsv\ by hand only seeds a new data
      directory, so auto-promotions learnt here stay.
-  2. Puts each DLL at its registered path (dist\squareinput.dll and
-     dist\squareinput32.dll on a first install). Applications that loaded the old
+     A release has no source to build: it ships the DLLs prebuilt in bin\
+     and the tables in tsv\, so it needs neither Rust nor Visual Studio.
+  2. Puts each DLL at its registered path. A first install uses
+     dist\squareinput.dll and dist\squareinput32.dll, or for a release, which
+     may be unpacked anywhere, the same names in
+     %LOCALAPPDATA%\Programs\squareinput. Applications that loaded the old
      DLL keep it locked, but a loaded DLL can still be renamed, so the old file
      is moved aside and those applications keep running it until they restart.
   3. Registers a DLL with regsvr32 (the 32-bit one with SysWOW64\regsvr32)
@@ -29,7 +33,9 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $clsid = '{89B0ACE9-CFE0-4081-A7C3-7FBFB6082420}'
 $tip = "0404:$clsid{8D43BCFA-667D-4A00-9383-968A0E98609E}"
-$dist = Join-Path $root 'dist'
+$bin = Join-Path $root 'bin'
+$prebuilt = Test-Path $bin
+$dist = if ($prebuilt) { Join-Path $env:LOCALAPPDATA 'Programs\squareinput' } else { Join-Path $root 'dist' }
 
 function Invoke-Cargo([string[]]$CargoArgs) {
     cargo @CargoArgs
@@ -66,8 +72,12 @@ $installed = @()
 foreach ($arch in @(
         @{ Target = 'x86_64-pc-windows-msvc'; Classes = 'CLSID'; Name = 'squareinput.dll'; Regsvr32 = "$env:WINDIR\System32\regsvr32.exe" },
         @{ Target = 'i686-pc-windows-msvc'; Classes = 'WOW6432Node\CLSID'; Name = 'squareinput32.dll'; Regsvr32 = "$env:WINDIR\SysWOW64\regsvr32.exe" })) {
-    Invoke-Cargo 'build', '--manifest-path', "$root\Cargo.toml", '--release', '-p', 'squareinput-tsf', '--target', $arch.Target
-    $built = "$root\target\$($arch.Target)\release\squareinput_tsf.dll"
+    if ($prebuilt) {
+        $built = Join-Path $bin $arch.Name
+    } else {
+        Invoke-Cargo 'build', '--manifest-path', "$root\Cargo.toml", '--release', '-p', 'squareinput-tsf', '--target', $arch.Target
+        $built = "$root\target\$($arch.Target)\release\squareinput_tsf.dll"
+    }
 
     $key = "Registry::HKEY_CLASSES_ROOT\$($arch.Classes)\$clsid\InprocServer32"
     $registered = (Get-ItemProperty $key -ErrorAction SilentlyContinue).'(default)'
@@ -108,6 +118,8 @@ if (-not $NoLanguage) {
 }
 
 # Delete moved-aside and superseded DLLs that are no longer loaded anywhere.
-Get-ChildItem $dist -Filter 'squareinput*' | Where-Object FullName -notin $installed | ForEach-Object {
-    try { Remove-Item $_.FullName -ErrorAction Stop } catch { }
+if (Test-Path $dist) {
+    Get-ChildItem $dist -Filter 'squareinput*' | Where-Object FullName -notin $installed | ForEach-Object {
+        try { Remove-Item $_.FullName -ErrorAction Stop } catch { }
+    }
 }
