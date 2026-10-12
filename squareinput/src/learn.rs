@@ -1,6 +1,7 @@
-//! 自動調前: a character committed from anywhere after page 2 key 1 moves to
-//! page 2 key 1, pushing the characters between down one slot. Page 1, where
-//! muscle memory matters most, never changes.
+//! 自動調前: a character committed from page 3 or later moves to page 2 key 1,
+//! pushing the characters between down one slot. Characters already on the
+//! first two pages never move, so page 1, where muscle memory matters most,
+//! is stable and page 2 changes only by insertion at its front.
 //!
 //! Moves are kept as a log of (code, text) and replayed onto the base table at
 //! start-up, so the base table can be re-harvested without losing them. The
@@ -8,6 +9,8 @@
 
 use crate::table::{Code, CodeTable, PAGE};
 
+/// Candidates from this slot on (page 3) move when committed.
+pub const PROMOTE_FROM: usize = 2 * PAGE;
 /// Slot that promoted characters move to: page 2, key 1.
 pub const PROMOTE_TO: usize = PAGE;
 
@@ -16,9 +19,9 @@ pub struct Promotions {
     log: Vec<(Code, String)>,
 }
 
-/// Move `list[index]` to [`PROMOTE_TO`] if it is further back. Returns whether it moved.
+/// Move `list[index]` to [`PROMOTE_TO`] if it is on page 3 or later. Returns whether it moved.
 fn promote(list: &mut Vec<String>, index: usize) -> bool {
-    if index <= PROMOTE_TO || index >= list.len() {
+    if index < PROMOTE_FROM || index >= list.len() {
         return false;
     }
     let item = list.remove(index);
@@ -96,32 +99,30 @@ mod tests {
     }
 
     #[test]
-    fn page_one_and_the_target_slot_never_move() {
+    fn pages_one_and_two_never_move() {
         let mut t = table(30);
         let mut p = Promotions::default();
-        for i in [0, 4, 8, 9] {
-            assert!(!p.record(&mut t, CODE, i));
+        for i in [0, 4, 8, 9, 13, 17] {
+            assert!(!p.record(&mut t, CODE, i), "{i}");
         }
         assert_eq!(t.candidates(CODE), table(30).candidates(CODE));
         assert!(p.is_empty());
     }
 
     #[test]
-    fn later_candidates_move_to_page_two_key_one() {
+    fn page_three_on_moves_to_page_two_key_one() {
         let mut t = table(30);
         let mut p = Promotions::default();
+        assert!(p.record(&mut t, CODE, 18));
+        assert_eq!(t.candidates(CODE)[9], "c18");
         assert!(p.record(&mut t, CODE, 25));
         let c = t.candidates(CODE);
         assert_eq!(c[9], "c25");
-        assert_eq!(c[10], "c9");
-        assert_eq!(c[25], "c24");
+        assert_eq!(c[10], "c18");
+        assert_eq!(c[11], "c9");
         assert_eq!(c[26], "c26");
         assert_eq!(&c[..9], &table(30).candidates(CODE)[..9]);
         assert_eq!(p.last_line().as_deref(), Some("110\tc25\n"));
-
-        // Page 2 characters move too.
-        assert!(p.record(&mut t, CODE, 13));
-        assert_eq!(t.candidates(CODE)[9], "c12");
     }
 
     #[test]
@@ -130,7 +131,7 @@ mod tests {
         let mut p = Promotions::default();
         p.record(&mut t, CODE, 30);
         p.record(&mut t, CODE, 35);
-        p.record(&mut t, CODE, 12);
+        p.record(&mut t, CODE, 20);
 
         let saved = p.serialize();
         let reloaded = Promotions::parse(&saved);

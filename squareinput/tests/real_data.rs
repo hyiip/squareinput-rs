@@ -55,7 +55,7 @@ fn every_harvested_candidate_is_typed_by_its_keys() {
         let slot = (page - 1) * PAGE + key - 1;
         // Committing from page 3 on would promote (自動調前) and shift later
         // slots, so check those through a fresh engine.
-        if slot > squareinput::PROMOTE_TO {
+        if slot >= squareinput::PROMOTE_FROM {
             e = Engine::new(table.clone(), SymbolTable::default());
         }
         assert_eq!(press(&mut e, &keys_for(code, slot)), cols[4], "{code} page {page} key {key}");

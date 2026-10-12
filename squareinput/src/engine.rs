@@ -579,8 +579,14 @@ mod tests {
     }
 
     #[test]
-    fn committing_beyond_page_one_promotes_to_page_two_key_one() {
+    fn committing_from_page_three_promotes_to_page_two_key_one() {
         let mut e = engine();
+        // Page 2 characters stay where they are.
+        let out: Vec<Outcome> = "11002".chars().map(|c| e.key(key_of(c))).collect();
+        assert_eq!(out.last().unwrap().commit.as_deref(), Some("c10"));
+        assert!(!out.last().unwrap().learned);
+        assert!(e.promotions().is_empty());
+
         let out: Vec<Outcome> = "110003".chars().map(|c| e.key(key_of(c))).collect();
         let last = out.last().unwrap();
         assert_eq!(last.commit.as_deref(), Some("c20"));

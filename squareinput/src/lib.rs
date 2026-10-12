@@ -11,5 +11,5 @@ mod table;
 
 pub use engine::{COMMON_CHARS, Cell, Engine, Key, Outcome, Screen, View};
 pub use homophone::{Homophones, compile as compile_homophones, unihan_tiers};
-pub use learn::{PROMOTE_TO, Promotions};
+pub use learn::{PROMOTE_FROM, PROMOTE_TO, Promotions};
 pub use table::{Code, CodeTable, PAGE, SymbolTable, TableError};
