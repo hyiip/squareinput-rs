@@ -12,6 +12,12 @@ use windows::core::*;
 
 use crate::{CLSID_TEXT_SERVICE, DESCRIPTION, GUID_PROFILE, LANGID};
 
+/// TSF categories we register under. UIELEMENTENABLED is needed for hosts that
+/// run their thread manager UI-less (TF_TMAE_UIELEMENTENABLEDONLY): they
+/// silently skip text services without it, and Win+Space then appears to do
+/// nothing. We keep drawing our own window there.
+const CATEGORIES: [GUID; 2] = [GUID_TFCAT_TIP_KEYBOARD, GUID_TFCAT_TIPCAP_UIELEMENTENABLED];
+
 fn clsid_key() -> String {
     format!("CLSID\\{{{CLSID_TEXT_SERVICE:?}}}")
 }
@@ -78,14 +84,19 @@ pub fn register() -> Result<()> {
             &CLSID_TEXT_SERVICE, LANGID, &GUID_PROFILE, &description, &icon, 0, HKL::default(), 0, true, 0,
         )?;
         let categories: ITfCategoryMgr = CoCreateInstance(&CLSID_TF_CategoryMgr, None, CLSCTX_INPROC_SERVER)?;
-        categories.RegisterCategory(&CLSID_TEXT_SERVICE, &GUID_TFCAT_TIP_KEYBOARD, &CLSID_TEXT_SERVICE)
+        for category in &CATEGORIES {
+            categories.RegisterCategory(&CLSID_TEXT_SERVICE, category, &CLSID_TEXT_SERVICE)?;
+        }
+        Ok(())
     })
 }
 
 pub fn unregister() -> Result<()> {
     with_com(|| unsafe {
         let categories: ITfCategoryMgr = CoCreateInstance(&CLSID_TF_CategoryMgr, None, CLSCTX_INPROC_SERVER)?;
-        let _ = categories.UnregisterCategory(&CLSID_TEXT_SERVICE, &GUID_TFCAT_TIP_KEYBOARD, &CLSID_TEXT_SERVICE);
+        for category in &CATEGORIES {
+            let _ = categories.UnregisterCategory(&CLSID_TEXT_SERVICE, category, &CLSID_TEXT_SERVICE);
+        }
         let profiles: ITfInputProcessorProfileMgr =
             CoCreateInstance(&CLSID_TF_InputProcessorProfiles, None, CLSCTX_INPROC_SERVER)?;
         profiles.UnregisterProfile(&CLSID_TEXT_SERVICE, LANGID, &GUID_PROFILE, 0)
