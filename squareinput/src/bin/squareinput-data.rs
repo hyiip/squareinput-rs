@@ -1,6 +1,7 @@
 //! Build the input method's data directory from the harvested tables and
-//! Unihan: copies the 字形 and punctuation tables (after checking they load)
-//! and compiles the compact 同音字 list.
+//! Unihan: copies the 字形 table without its private-use characters and the
+//! punctuation table (after checking they load), and compiles the compact
+//! 同音字 list.
 //!
 //! Usage: squareinput-data [--local DIR] [--out DIR]
 //!   --local  harvest and Unihan files (default: local, beside the workspace)
@@ -11,7 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use squareinput::{CodeTable, Homophones, SymbolTable, compile_homophones};
+use squareinput::{CodeTable, Homophones, SymbolTable, clean_private_use, compile_homophones};
 
 const TAG: &str = "current";
 
@@ -36,8 +37,8 @@ fn run() -> Result<(), String> {
         }
     }
 
-    let zixing = read(&local.join("zixing.tsv"))?;
-    let table = CodeTable::from_tsv(&zixing, TAG).map_err(|e| format!("zixing.tsv: {e}"))?;
+    let zixing = clean_private_use(&read(&local.join("zixing.tsv"))?);
+    let table = CodeTable::from_tsv(&zixing.tsv, TAG).map_err(|e| format!("zixing.tsv: {e}"))?;
     let punct = read(&local.join("punct.tsv"))?;
     let symbols = SymbolTable::from_tsv(&punct, TAG).map_err(|e| format!("punct.tsv: {e}"))?;
     if table.len() != 810 || symbols.slots(".").is_empty() {
@@ -54,7 +55,7 @@ fn run() -> Result<(), String> {
     let homophones = Homophones::from_compact(&compact);
 
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
-    write(&out.join("zixing.tsv"), &zixing)?;
+    write(&out.join("zixing.tsv"), &zixing.tsv)?;
     write(&out.join("punct.tsv"), &punct)?;
     write(&out.join("homophones.tsv"), &compact)?;
     println!(
@@ -64,6 +65,10 @@ fn run() -> Result<(), String> {
         symbols.slots(".").len(),
         compact.lines().count(),
         homophones.slots("我").iter().flatten().count(),
+    );
+    println!(
+        "private-use characters: {} replaced, {} blanked on page 1, {} removed from later pages",
+        zixing.mapped, zixing.blanked, zixing.removed,
     );
     Ok(())
 }

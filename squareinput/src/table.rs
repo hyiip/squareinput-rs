@@ -7,12 +7,18 @@
 //! how they are opened ("." for punctuation, ".94" for 其他 → ㄅ).
 //!
 //! A list is stored as slots: slot `i` is page `i / 9`, key `i % 9 + 1`.
+//! An empty slot is a blank cell that picks nothing. It is written as
+//! [`BLANK`], the full-width space that pads the grids so that characters
+//! keep fixed keys (page 1 of codes, key 5 between bracket pairs).
 
 use std::collections::HashMap;
 use std::fmt;
 
 /// Keys per page.
 pub const PAGE: usize = 9;
+
+/// Text of a blank cell.
+pub const BLANK: &str = "\u{3000}";
 
 /// A 字形 code: left feature, component, then a right feature (分體) or 0 (獨體).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -96,28 +102,29 @@ fn parse_rows(tsv: &str, tag: &str) -> Result<HashMap<String, Slots>, TableError
 /// 字形 candidates per code, in display order.
 #[derive(Debug, Clone, Default)]
 pub struct CodeTable {
-    lists: HashMap<Code, Vec<String>>,
+    lists: HashMap<Code, Slots>,
 }
 
 impl CodeTable {
     /// Load the `tag` rows of a harvest TSV. Rows whose name is not a 字形 code
-    /// are ignored. Candidate lists must have no gaps.
+    /// are ignored. Candidate lists must have no gaps; [`BLANK`] rows become
+    /// empty slots.
     pub fn from_tsv(tsv: &str, tag: &str) -> Result<CodeTable, TableError> {
         let mut lists = HashMap::new();
         for (name, slots) in parse_rows(tsv, tag)? {
             let Some(code) = Code::parse(&name) else { continue };
             let list: Option<Vec<String>> = slots.into_iter().collect();
             let list = list.ok_or_else(|| TableError { line: 0, message: format!("code {code} has a gap") })?;
-            lists.insert(code, list);
+            lists.insert(code, list.into_iter().map(|text| (text != BLANK).then_some(text)).collect());
         }
         Ok(CodeTable { lists })
     }
 
-    pub fn candidates(&self, code: Code) -> &[String] {
+    pub fn candidates(&self, code: Code) -> &[Option<String>] {
         self.lists.get(&code).map_or(&[], Vec::as_slice)
     }
 
-    pub(crate) fn candidates_mut(&mut self, code: Code) -> Option<&mut Vec<String>> {
+    pub(crate) fn candidates_mut(&mut self, code: Code) -> Option<&mut Slots> {
         self.lists.get_mut(&code)
     }
 
@@ -135,6 +142,7 @@ impl CodeTable {
         let mut best: HashMap<&str, usize> = HashMap::new();
         for list in self.lists.values() {
             for (i, text) in list.iter().enumerate() {
+                let Some(text) = text else { continue };
                 best.entry(text.as_str()).and_modify(|b| *b = (*b).min(i)).or_insert(i);
             }
         }
@@ -143,7 +151,7 @@ impl CodeTable {
 }
 
 /// Punctuation and symbol lists. Slots may be empty (punctuation page 1, key 9
-/// is the 其他 menu rather than a symbol).
+/// is the 其他 menu rather than a symbol) or [`BLANK`].
 #[derive(Debug, Clone, Default)]
 pub struct SymbolTable {
     lists: HashMap<String, Slots>,
@@ -154,6 +162,11 @@ impl SymbolTable {
     pub fn from_tsv(tsv: &str, tag: &str) -> Result<SymbolTable, TableError> {
         let mut lists = parse_rows(tsv, tag)?;
         lists.retain(|name, _| name.starts_with('.'));
+        for slot in lists.values_mut().flatten() {
+            if slot.as_deref() == Some(BLANK) {
+                *slot = None;
+            }
+        }
         Ok(SymbolTable { lists })
     }
 
@@ -186,10 +199,18 @@ mod tests {
         let table = CodeTable::from_tsv(&full, "t").unwrap();
         let c = table.candidates(Code([2, 7, 0]));
         assert_eq!(c.len(), 10);
-        assert_eq!(c[1], "字2");
-        assert_eq!(c[9], "丸");
+        assert_eq!(c[1].as_deref(), Some("字2"));
+        assert_eq!(c[9].as_deref(), Some("丸"));
         assert!(table.candidates(Code([1, 6, 1])).is_empty());
         assert_eq!(table.len(), 2);
+    }
+
+    #[test]
+    fn full_width_spaces_are_blank_cells() {
+        let tsv = format!("t\t165\t1\t1\t{BLANK}\nt\t165\t1\t2\t都\n");
+        let table = CodeTable::from_tsv(&tsv, "t").unwrap();
+        assert_eq!(table.candidates(Code([1, 6, 5])), [None, Some("都".to_owned())]);
+        assert!(!table.best_slots().contains_key(BLANK));
     }
 
     #[test]
@@ -201,8 +222,9 @@ mod tests {
 
     #[test]
     fn symbols_keep_gaps() {
-        let tsv = "t\t.\t1\t1\t！\nt\t.\t1\t8\t？\nt\t.\t2\t1\t‘\nt\t.94\t1\t1\tㄅ\nt\t892\t1\t1\t惰\n";
+        let tsv = "t\t.\t1\t1\t！\nt\t.\t1\t8\t？\nt\t.\t2\t1\t‘\nt\t.94\t1\t1\tㄅ\nt\t892\t1\t1\t惰\nt\t.99\t1\t4\t（\nt\t.99\t1\t5\t\u{3000}\n";
         let s = SymbolTable::from_tsv(tsv, "t").unwrap();
+        assert_eq!(s.slots(".99")[4], None);
         let p = s.slots(".");
         assert_eq!(p.len(), 10);
         assert_eq!(p[0].as_deref(), Some("！"));

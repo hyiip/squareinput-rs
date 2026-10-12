@@ -274,7 +274,7 @@ impl Engine {
     }
 
     fn open_code(&self, code: Code) -> State {
-        if self.table.candidates(code).is_empty() {
+        if self.table.candidates(code).iter().all(Option::is_none) {
             State::NoCandidates(code)
         } else {
             State::Candidates { code, page: 0 }
@@ -283,7 +283,7 @@ impl Engine {
 
     fn pick_candidate(&mut self, code: Code, page: usize, k: u8) -> (State, Outcome) {
         let index = page * PAGE + k as usize - 1;
-        let Some(text) = self.table.candidates(code).get(index).cloned() else {
+        let Some(text) = self.table.candidates(code).get(index).cloned().flatten() else {
             return (State::Candidates { code, page }, Outcome::eaten());
         };
         if self.armed {
@@ -360,7 +360,7 @@ impl Engine {
             S::Candidates { code, page } => {
                 let list = self.table.candidates(*code);
                 v.screen = Screen::Candidates;
-                v.cells = std::array::from_fn(|i| list.get(page * PAGE + i).map_or(Cell::Empty, |t| Cell::Text(t.clone())));
+                v.cells = text_cells(list, *page);
                 v.zero_label = "下　頁";
                 v.hints = PICK;
                 (v.page, v.pages) = (*page, page_count(list.len()));
@@ -501,6 +501,21 @@ mod tests {
         // An empty slot on a short last page does nothing.
         assert_eq!(type_keys(&mut e, "9"), "");
         assert_eq!(type_keys(&mut e, "1"), "憭");
+    }
+
+    #[test]
+    fn blank_cells_pick_nothing() {
+        use crate::table::BLANK;
+        let tsv = rows("165", &[BLANK, BLANK, BLANK, BLANK, "都"]) + &rows("166", &[BLANK]);
+        let mut e = Engine::new(CodeTable::from_tsv(&tsv, "t").unwrap(), SymbolTable::default());
+        type_keys(&mut e, "165");
+        assert_eq!(e.view().cells[0], Cell::Empty);
+        assert_eq!(type_keys(&mut e, "1"), "");
+        assert!(e.is_composing());
+        assert_eq!(type_keys(&mut e, "5"), "都");
+        // A code with nothing but blanks has no candidates.
+        type_keys(&mut e, "166");
+        assert_eq!(e.view().screen, Screen::NoCandidates);
     }
 
     #[test]

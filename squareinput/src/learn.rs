@@ -20,7 +20,7 @@ pub struct Promotions {
 }
 
 /// Move `list[index]` to [`PROMOTE_TO`] if it is on page 3 or later. Returns whether it moved.
-fn promote(list: &mut Vec<String>, index: usize) -> bool {
+fn promote(list: &mut Vec<Option<String>>, index: usize) -> bool {
     if index < PROMOTE_FROM || index >= list.len() {
         return false;
     }
@@ -67,7 +67,7 @@ impl Promotions {
     pub fn apply(&self, table: &mut CodeTable) {
         for (code, text) in &self.log {
             if let Some(list) = table.candidates_mut(*code)
-                && let Some(i) = list.iter().position(|t| t == text)
+                && let Some(i) = list.iter().position(|t| t.as_ref() == Some(text))
             {
                 promote(list, i);
             }
@@ -78,11 +78,11 @@ impl Promotions {
     /// table (and so the log) changed.
     pub fn record(&mut self, table: &mut CodeTable, code: Code, index: usize) -> bool {
         let Some(list) = table.candidates_mut(code) else { return false };
-        let text = list.get(index).cloned();
+        let Some(text) = list.get(index).cloned().flatten() else { return false };
         if !promote(list, index) {
             return false;
         }
-        self.log.extend(text.map(|t| (code, t)));
+        self.log.push((code, text));
         true
     }
 }
@@ -114,13 +114,13 @@ mod tests {
         let mut t = table(30);
         let mut p = Promotions::default();
         assert!(p.record(&mut t, CODE, 18));
-        assert_eq!(t.candidates(CODE)[9], "c18");
+        assert_eq!(t.candidates(CODE)[9].as_deref(), Some("c18"));
         assert!(p.record(&mut t, CODE, 25));
         let c = t.candidates(CODE);
-        assert_eq!(c[9], "c25");
-        assert_eq!(c[10], "c18");
-        assert_eq!(c[11], "c9");
-        assert_eq!(c[26], "c26");
+        assert_eq!(c[9].as_deref(), Some("c25"));
+        assert_eq!(c[10].as_deref(), Some("c18"));
+        assert_eq!(c[11].as_deref(), Some("c9"));
+        assert_eq!(c[26].as_deref(), Some("c26"));
         assert_eq!(&c[..9], &table(30).candidates(CODE)[..9]);
         assert_eq!(p.last_line().as_deref(), Some("110\tc25\n"));
     }
@@ -153,5 +153,15 @@ mod tests {
         let mut p = Promotions::default();
         assert!(!p.record(&mut t, Code([9, 9, 9]), 19));
         assert!(!p.record(&mut t, CODE, 99));
+    }
+
+    #[test]
+    fn blank_cells_never_move() {
+        let tsv: String = (0..20).map(|i| format!("t\t110\t{}\t{}\t{}\n", i / PAGE + 1, i % PAGE + 1, if i == 19 { crate::table::BLANK } else { "c" })).collect();
+        let mut t = CodeTable::from_tsv(&tsv, "t").unwrap();
+        let mut p = Promotions::default();
+        assert!(!p.record(&mut t, CODE, 19));
+        assert_eq!(t.candidates(CODE)[19], None);
+        assert!(p.is_empty());
     }
 }

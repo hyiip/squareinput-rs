@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use squareinput::{Code, CodeTable, Engine, Homophones, Key, PAGE, SymbolTable, compile_homophones};
+use squareinput::{BLANK, Code, CodeTable, Engine, Homophones, Key, PAGE, SymbolTable, clean_private_use, compile_homophones};
 
 fn local() -> PathBuf {
     std::env::var_os("SQUAREINPUT_LOCAL").map_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../local")), PathBuf::from)
@@ -22,12 +22,45 @@ fn read(name: &str) -> Option<String> {
     }
 }
 
+/// The 字形 table as squareinput-data writes it: without private-use characters.
+fn zixing() -> Option<String> {
+    read("zixing.tsv").map(|raw| clean_private_use(&raw).tsv)
+}
+
+fn is_private_use(text: &str) -> bool {
+    text.chars().any(|c| ('\u{E000}'..='\u{F8FF}').contains(&c))
+}
+
+/// The table has 194 private-use entries. 17 have a standard character not
+/// already under their code; the rest go. Page 1 keeps every other entry on
+/// its key.
+#[test]
+fn private_use_characters_are_cleaned_out() {
+    let Some(raw) = read("zixing.tsv") else { return };
+    let cleaned = clean_private_use(&raw);
+    assert_eq!((cleaned.mapped, cleaned.blanked + cleaned.removed), (17, 177));
+    assert!(!is_private_use(&cleaned.tsv));
+    eprintln!("{} blanked on page 1, {} removed", cleaned.blanked, cleaned.removed);
+
+    let page_one = |tsv: &str| -> Vec<String> {
+        tsv.lines().filter(|line| line.split('\t').nth(2) == Some("1")).map(str::to_owned).collect()
+    };
+    let before = page_one(&raw);
+    let after = page_one(&cleaned.tsv);
+    assert_eq!(before.len(), after.len());
+    for (b, a) in before.iter().zip(&after) {
+        if !is_private_use(b) {
+            assert_eq!(a, b);
+        }
+    }
+}
+
 /// 200,000 random numpad keys over the real tables, 同音字 and 自動調前
 /// included: the engine must never panic and its view must stay consistent.
 #[test]
 fn random_keys_keep_the_engine_consistent() {
     let (Some(tsv), Some(punct), Some(readings), Some(dict), Some(other)) = (
-        read("zixing.tsv"),
+        zixing(),
         read("punct.tsv"),
         read(r"unihan\x\Unihan_Readings.txt"),
         read(r"unihan\x\Unihan_DictionaryLikeData.txt"),
@@ -61,7 +94,7 @@ fn random_keys_keep_the_engine_consistent() {
         let out = e.key(key);
         assert_eq!(out.eaten, wanted, "wants() disagreed with key() for {key:?}");
         if let Some(text) = &out.commit {
-            assert!(!text.is_empty());
+            assert!(!text.is_empty() && text != BLANK && !is_private_use(text), "committed {text:?}");
             commits += 1;
         }
         learned += usize::from(out.learned);
@@ -92,7 +125,7 @@ fn keys_for(code: Code, slot: usize) -> String {
 
 #[test]
 fn every_harvested_candidate_is_typed_by_its_keys() {
-    let Some(tsv) = read("zixing.tsv") else { return };
+    let Some(tsv) = zixing() else { return };
     let table = CodeTable::from_tsv(&tsv, "current").unwrap();
     assert_eq!(table.len(), 810);
     let mut e = Engine::new(table.clone(), SymbolTable::default());
@@ -108,7 +141,12 @@ fn every_harvested_candidate_is_typed_by_its_keys() {
         if slot >= squareinput::PROMOTE_FROM {
             e = Engine::new(table.clone(), SymbolTable::default());
         }
-        assert_eq!(press(&mut e, &keys_for(code, slot)), cols[4], "{code} page {page} key {key}");
+        if cols[4] == BLANK {
+            // A blank cell picks nothing and leaves the code open; cancel it.
+            assert_eq!(press(&mut e, &(keys_for(code, slot) + ".")), "", "{code} page {page} key {key}");
+        } else {
+            assert_eq!(press(&mut e, &keys_for(code, slot)), cols[4], "{code} page {page} key {key}");
+        }
         checked += 1;
     }
     assert!(checked > 21_000, "{checked}");
@@ -116,7 +154,7 @@ fn every_harvested_candidate_is_typed_by_its_keys() {
 
 #[test]
 fn manual_examples() {
-    let Some(tsv) = read("zixing.tsv") else { return };
+    let Some(tsv) = zixing() else { return };
     let table = CodeTable::from_tsv(&tsv, "current").unwrap();
     let mut e = Engine::new(table, SymbolTable::default());
     // Known codes, plus the key to pick each.
@@ -141,7 +179,7 @@ fn punctuation_and_symbols() {
 #[test]
 fn homophones_of_wo_cover_the_common_ones() {
     let (Some(tsv), Some(readings), Some(dict), Some(other)) = (
-        read("zixing.tsv"),
+        zixing(),
         read(r"unihan\x\Unihan_Readings.txt"),
         read(r"unihan\x\Unihan_DictionaryLikeData.txt"),
         read(r"unihan\x\Unihan_OtherMappings.txt"),
