@@ -66,7 +66,6 @@ if ((Test-Path "$root\local\codes.tsv") -and (Test-Path "$root\local\punct.tsv")
     Write-Warning "no tables in local\ or tsv\: put codes.tsv, punct.tsv and homophones.tsv in tsv\"
 }
 
-New-Item -ItemType Directory -Force $dist | Out-Null
 $installed = @()
 
 foreach ($arch in @(
@@ -93,6 +92,7 @@ foreach ($arch in @(
             Write-Host "old DLL is in use; moved it to $aside"
         }
     } else {
+        New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
         Copy-Item $built $target
     }
     Write-Host "installed $target"
