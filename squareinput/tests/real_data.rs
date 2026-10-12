@@ -22,12 +22,12 @@ fn read(name: &str) -> Option<String> {
     }
 }
 
-/// The 字形 table as squareinput-data writes it: without private-use characters.
-fn zixing() -> Option<String> {
-    read("zixing.tsv").map(|raw| clean_private_use(&raw).tsv)
+/// The code table as squareinput-data writes it: without private-use characters.
+fn codes() -> Option<String> {
+    read("codes.tsv").map(|raw| clean_private_use(&raw).tsv)
 }
 
-/// The frequency lists squareinput-data ranks 同音字 by, those that are present.
+/// The frequency lists squareinput-data ranks homophones by, those that are present.
 fn frequency_lists() -> Vec<(String, f64)> {
     [("zhyuewiki-chars.tsv", 1.0), ("commonvoice-chars.tsv", 0.5)]
         .into_iter()
@@ -50,7 +50,7 @@ fn is_private_use(text: &str) -> bool {
 /// its key.
 #[test]
 fn private_use_characters_are_cleaned_out() {
-    let Some(raw) = read("zixing.tsv") else { return };
+    let Some(raw) = read("codes.tsv") else { return };
     let cleaned = clean_private_use(&raw);
     assert_eq!((cleaned.mapped, cleaned.blanked + cleaned.removed), (17, 177));
     assert!(!is_private_use(&cleaned.tsv));
@@ -69,12 +69,12 @@ fn private_use_characters_are_cleaned_out() {
     }
 }
 
-/// 200,000 random numpad keys over the real tables, 同音字 and 自動調前
+/// 200,000 random numpad keys over the real tables, homophones and auto-promotion
 /// included: the engine must never panic and its view must stay consistent.
 #[test]
 fn random_keys_keep_the_engine_consistent() {
     let (Some(tsv), Some(punct), Some(readings), Some(dict), Some(other)) = (
-        zixing(),
+        codes(),
         read("punct.tsv"),
         read(r"unihan\x\Unihan_Readings.txt"),
         read(r"unihan\x\Unihan_DictionaryLikeData.txt"),
@@ -115,7 +115,7 @@ fn random_keys_keep_the_engine_consistent() {
         let v = e.view();
         assert!(v.pages >= 1 && v.page < v.pages, "page {} of {}", v.page, v.pages);
     }
-    eprintln!("200000 random keys: {commits} commits, {learned} 自動調前 moves, {} logged", e.promotions().len());
+    eprintln!("200000 random keys: {commits} commits, {learned} auto-promotions, {} logged", e.promotions().len());
     assert!(commits > 1000);
 }
 
@@ -139,7 +139,7 @@ fn keys_for(code: Code, slot: usize) -> String {
 
 #[test]
 fn every_harvested_candidate_is_typed_by_its_keys() {
-    let Some(tsv) = zixing() else { return };
+    let Some(tsv) = codes() else { return };
     let table = CodeTable::from_tsv(&tsv, "current").unwrap();
     assert_eq!(table.len(), 810);
     let mut e = Engine::new(table.clone(), SymbolTable::default());
@@ -150,7 +150,7 @@ fn every_harvested_candidate_is_typed_by_its_keys() {
             continue;
         };
         let slot = (page - 1) * PAGE + key - 1;
-        // Committing from page 3 on would promote (自動調前) and shift later
+        // Committing from page 3 on would auto-promote and shift later
         // slots, so check those through a fresh engine.
         if slot >= squareinput::PROMOTE_FROM {
             e = Engine::new(table.clone(), SymbolTable::default());
@@ -168,7 +168,7 @@ fn every_harvested_candidate_is_typed_by_its_keys() {
 
 #[test]
 fn manual_examples() {
-    let Some(tsv) = zixing() else { return };
+    let Some(tsv) = codes() else { return };
     let table = CodeTable::from_tsv(&tsv, "current").unwrap();
     let mut e = Engine::new(table, SymbolTable::default());
     // Known codes, plus the key to pick each.
@@ -191,9 +191,9 @@ fn punctuation_and_symbols() {
 }
 
 #[test]
-fn homophones_of_wo_cover_the_common_ones() {
+fn common_homophones_come_first() {
     let (Some(tsv), Some(readings), Some(dict), Some(other)) = (
-        zixing(),
+        codes(),
         read(r"unihan\x\Unihan_Readings.txt"),
         read(r"unihan\x\Unihan_DictionaryLikeData.txt"),
         read(r"unihan\x\Unihan_OtherMappings.txt"),

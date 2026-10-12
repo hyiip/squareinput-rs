@@ -2,7 +2,7 @@
 name = "squareinput-tsf"
 version = "0.1.0"
 edition = "2024"
-description = "字形 input method as a TSF text service"
+description = "Shape-based Chinese input method as a TSF text service"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

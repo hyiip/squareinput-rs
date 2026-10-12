@@ -13,7 +13,7 @@
      only on its first install or with -Register, which is needed when the
      registration itself changes, e.g. TSF categories. TSF profiles live in
      HKLM, so that step raises a UAC prompt; plain code updates need none.
-  4. Adds "Square Input" to the keyboards of the 中文(香港) language, unless
+  4. Adds "Square Input" to the keyboards of the Chinese (Hong Kong) language, unless
      -NoLanguage is given. Switch to it with Win+Space.
 
   Moved-aside DLLs that nothing has loaded any more are deleted.
@@ -74,7 +74,7 @@ if (-not $NoLanguage) {
     $languages = Get-WinUserLanguageList
     $hk = $languages | Where-Object LanguageTag -like 'zh-Hant-HK' | Select-Object -First 1
     if (-not $hk) { $hk = $languages | Where-Object LanguageTag -like 'zh-*' | Select-Object -First 1 }
-    if (-not $hk) { throw 'no Chinese language in the language list; add 中文(香港) first' }
+    if (-not $hk) { throw 'no Chinese language in the language list; add Chinese (Hong Kong) first' }
     if ($hk.InputMethodTips -notcontains $tip) {
         $hk.InputMethodTips.Add($tip)
         Set-WinUserLanguageList $languages -Force

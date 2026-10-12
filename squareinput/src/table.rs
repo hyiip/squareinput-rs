@@ -3,8 +3,8 @@
 //! sits on 1-based `page` under numpad `key`. Names with no entries have a
 //! single line with `-` for page and key.
 //!
-//! 字形 codes are named by their three digits ("892", "270"); symbol lists by
-//! how they are opened ("." for punctuation, ".94" for 其他 → ㄅ).
+//! Shape codes are named by their three digits ("892", "270"); symbol lists by
+//! how they are opened ("." for punctuation, ".94" for More → ㄅ).
 //!
 //! A list is stored as slots: slot `i` is page `i / 9`, key `i % 9 + 1`.
 //! An empty slot is a blank cell that picks nothing. It is written as
@@ -20,7 +20,7 @@ pub const PAGE: usize = 9;
 /// Text of a blank cell.
 pub const BLANK: &str = "\u{3000}";
 
-/// A 字形 code: left feature, component, then a right feature (分體) or 0 (獨體).
+/// A shape code: left feature, component, then a right feature (split) or 0 (single-part).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Code(pub [u8; 3]);
 
@@ -99,14 +99,14 @@ fn parse_rows(tsv: &str, tag: &str) -> Result<HashMap<String, Slots>, TableError
     Ok(lists)
 }
 
-/// 字形 candidates per code, in display order.
+/// Shape candidates per code, in display order.
 #[derive(Debug, Clone, Default)]
 pub struct CodeTable {
     lists: HashMap<Code, Slots>,
 }
 
 impl CodeTable {
-    /// Load the `tag` rows of a harvest TSV. Rows whose name is not a 字形 code
+    /// Load the `tag` rows of a harvest TSV. Rows whose name is not a shape code
     /// are ignored. Candidate lists must have no gaps; [`BLANK`] rows become
     /// empty slots.
     pub fn from_tsv(tsv: &str, tag: &str) -> Result<CodeTable, TableError> {
@@ -151,7 +151,7 @@ impl CodeTable {
 }
 
 /// Punctuation and symbol lists. Slots may be empty (punctuation page 1, key 9
-/// is the 其他 menu rather than a symbol) or [`BLANK`].
+/// is the More menu rather than a symbol) or [`BLANK`].
 #[derive(Debug, Clone, Default)]
 pub struct SymbolTable {
     lists: HashMap<String, Slots>,

@@ -1,4 +1,4 @@
-//! The key state machine of the 字形 mode.
+//! The key state machine of the shape mode.
 //! Only numpad keys exist here: the input method is meant to be used with the
 //! right hand alone.
 //!
@@ -6,15 +6,18 @@
 //!   punctuation while nothing has been typed yet ("fresh"); afterwards it
 //!   picks from the nine common characters on the idle grid.
 //! - Feature: 1-9 picks a component.
-//! - Component: `0` completes a 獨體 code; 1-9 picks the right feature of a 分體 code.
+//! - Component: `0` completes a single-part code; 1-9 picks the right feature
+//!   of a split code.
 //! - Candidates: 1-9 commits, `0` is next page, `-` previous page.
-//! - `.` cancels to idle from any other screen, and disarms 同音字.
-//! - Punctuation page 1, key 9 (其他) opens a menu: 2 (音) arms 同音字 for the
-//!   next character, 4-9 open symbol lists. 1 and 3 (劃, 部) are not supported.
-//! - With 同音字 armed, picking a character shows its homophones instead of
-//!   committing it; picking one of those commits it.
+//! - `.` cancels to idle from any other screen, and disarms homophones.
+//! - Punctuation page 1, key 9 (More) opens a menu: 2 (sound) arms homophones
+//!   for the next character, 4-9 open symbol lists. 1 and 3 (stroke and
+//!   radical lookups) are not supported.
+//! - With homophones armed, picking a character shows its homophones instead
+//!   of committing it; picking one of those commits it.
 //!
-//! 姓氏 (`0` after a feature), 字形檢字 (`-`) and 詞輸入 (`+`) are not supported.
+//! Surname lookup (`0` after a feature), shape lookup (`-`) and word input
+//! (`+`) are not supported.
 //! While composing, any key without a meaning is swallowed so it cannot leak
 //! into the application mid-code; while idle, such keys pass through.
 
@@ -28,9 +31,9 @@ use crate::table::{Code, CodeTable, PAGE, SymbolTable};
 pub const COMMON_CHARS: [&str; 9] = ["個", "能", "的", "到", "資", "就", "你", "這", "好"];
 
 const PUNCTUATION: &str = ".";
-/// Punctuation page 1, key 9 opens the 其他 menu.
+/// Punctuation page 1, key 9 opens the More menu.
 const MORE_SLOT: usize = 8;
-/// 其他 menu by key 1-9; 劃 (1) and 部 (3) lookups are not supported.
+/// More menu by key 1-9; the stroke (1) and radical (3) lookups are not supported.
 const MENU: [&str; 9] = ["", "音", "", "ㄅ", "Ａ", "﹡", "├", "１", "()"];
 const MENU_HOMOPHONES: u8 = 2;
 
@@ -54,7 +57,7 @@ pub enum Cell {
     Feature(u8),
     /// Component `key` of `feature`, drawn by the UI.
     Component { feature: u8, key: u8 },
-    /// 其他: opens the symbol menu.
+    /// More: opens the symbol menu.
     More,
 }
 
@@ -96,7 +99,7 @@ pub struct Outcome {
     pub eaten: bool,
     /// Text to insert into the document.
     pub commit: Option<String>,
-    /// 自動調前 moved a character; append [`Promotions::last_line`] to the saved log.
+    /// Auto-promotion moved a character; append [`Promotions::last_line`] to the saved log.
     pub learned: bool,
 }
 
@@ -169,7 +172,7 @@ impl Engine {
         self
     }
 
-    /// Restore a saved 自動調前 log, replaying it onto the table.
+    /// Restore a saved auto-promotion log, replaying it onto the table.
     pub fn with_promotions(mut self, promotions: Promotions) -> Engine {
         promotions.apply(&mut self.table);
         self.promotions = promotions;
@@ -298,7 +301,7 @@ impl Engine {
         (State::Idle, Outcome::commit(text, learned))
     }
 
-    /// Commit `text`, or show its homophones if 同音字 is armed.
+    /// Commit `text`, or show its homophones if homophones are armed.
     fn pick_char(&mut self, text: String) -> (State, Outcome) {
         if std::mem::take(&mut self.armed) {
             let layout = self.homophones.layout(&text, |syllable, group| self.promotions.order(syllable, group));
@@ -435,7 +438,7 @@ mod tests {
             + &rows("999", &["餓", "鵝"])
             + "t\t161\t-\t-\t\n"
             + &rows(".94", &["ㄅ", "ㄆ", "ㄇ"]);
-        // Punctuation page 1 has no symbol on key 9 (其他).
+        // Punctuation page 1 has no symbol on key 9 (More).
         tsv += &rows(".", &["！", "：", "；", "。", "，", "、", "—", "？"]);
         tsv += "t\t.\t2\t1\t‘\nt\t.\t2\t2\t“\n";
         let table = CodeTable::from_tsv(&tsv, "t").unwrap();
@@ -462,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn fen_ti_code_commits_from_the_grid() {
+    fn split_code_commits_from_the_grid() {
         let mut e = engine();
         assert_eq!(type_keys(&mut e, "892"), "");
         let v = e.view();
@@ -475,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn du_ti_code_is_completed_with_zero() {
+    fn single_part_code_is_completed_with_zero() {
         let mut e = engine();
         type_keys(&mut e, "97");
         let v = e.view();
@@ -570,7 +573,7 @@ mod tests {
         assert_eq!(e.view().screen, Screen::Menu);
         assert_eq!(e.view().cells[0], Cell::Empty);
         assert_eq!(type_keys(&mut e, "42"), "ㄆ");
-        // Unsupported 劃 lookup does nothing.
+        // The unsupported stroke lookup does nothing.
         type_keys(&mut e, ".91");
         assert_eq!(e.view().screen, Screen::Menu);
     }
@@ -599,7 +602,7 @@ mod tests {
         let homophones = Homophones::from_compact(&crate::homophone::compile(&table, &readings, "", "", &[]));
         let mut e = Engine::new(table, SymbolTable::default()).with_homophones(homophones);
 
-        // Arm 同音字, type the first character, then page 3 key 2.
+        // Arm homophones, type the first character, then page 3 key 2.
         let out = ".921101002".chars().map(|c| e.key(key_of(c))).last().unwrap();
         assert_eq!(out.commit.as_deref(), Some(chars[19].as_str()));
         assert!(out.learned);

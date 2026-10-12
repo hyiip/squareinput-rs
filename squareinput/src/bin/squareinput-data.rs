@@ -1,7 +1,7 @@
 //! Build the input method's data directory from the harvested tables, Unihan
-//! and character frequency lists: copies the 字形 table without its
+//! and character frequency lists: copies the code table without its
 //! private-use characters and the punctuation table (after checking they
-//! load), and compiles the compact 同音字 list.
+//! load), and compiles the compact homophone list.
 //!
 //! Usage: squareinput-data [--local DIR] [--out DIR]
 //!   --local  harvest and Unihan files (default: local, beside the workspace)
@@ -42,15 +42,15 @@ fn run() -> Result<(), String> {
         }
     }
 
-    let zixing = clean_private_use(&read(&local.join("zixing.tsv"))?);
-    let table = CodeTable::from_tsv(&zixing.tsv, TAG).map_err(|e| format!("zixing.tsv: {e}"))?;
+    let codes = clean_private_use(&read(&local.join("codes.tsv"))?);
+    let table = CodeTable::from_tsv(&codes.tsv, TAG).map_err(|e| format!("codes.tsv: {e}"))?;
     let punct = read(&local.join("punct.tsv"))?;
     let symbols = SymbolTable::from_tsv(&punct, TAG).map_err(|e| format!("punct.tsv: {e}"))?;
     if table.len() != 810 || symbols.slots(".").is_empty() {
         return Err(format!("unexpected tables: {} codes, {} punctuation slots", table.len(), symbols.slots(".").len()));
     }
 
-    // Frequency lists are optional: without them, Unihan alone ranks 同音字.
+    // Frequency lists are optional: without them, Unihan alone ranks homophones.
     let mut lists = Vec::new();
     for (name, weight) in FREQUENCY_LISTS {
         match read(&local.join("freq").join(name)) {
@@ -71,11 +71,11 @@ fn run() -> Result<(), String> {
     let homophones = Homophones::from_compact(&compact);
 
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
-    write(&out.join("zixing.tsv"), &zixing.tsv)?;
+    write(&out.join("codes.tsv"), &codes.tsv)?;
     write(&out.join("punct.tsv"), &punct)?;
     write(&out.join("homophones.tsv"), &compact)?;
     println!(
-        "wrote {}: {} codes, {} punctuation slots, 同音字 for {} characters ({} homophones of 我)",
+        "wrote {}: {} codes, {} punctuation slots, homophones for {} characters ({} for 我)",
         out.display(),
         table.len(),
         symbols.slots(".").len(),
@@ -84,7 +84,7 @@ fn run() -> Result<(), String> {
     );
     println!(
         "private-use characters: {} replaced, {} blanked on page 1, {} removed from later pages",
-        zixing.mapped, zixing.blanked, zixing.removed,
+        codes.mapped, codes.blanked, codes.removed,
     );
     Ok(())
 }

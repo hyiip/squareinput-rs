@@ -1,9 +1,9 @@
-//! 自動調前: a character committed from page 3 or later moves to page 2 key 1,
+//! Auto-promotion: a character committed from page 3 or later moves to page 2 key 1,
 //! pushing the characters between down one slot. Characters already on the
 //! first two pages never move, so page 1, where muscle memory matters most,
 //! is stable and page 2 changes only by insertion at its front.
 //!
-//! The same goes for 同音字, per syllable: a homophone picked from page 3 or
+//! The same goes for homophones, per syllable: a homophone picked from page 3 or
 //! later of its reading moves to page 2 key 1 of that reading, for every
 //! character with that reading.
 //!
@@ -24,7 +24,7 @@ pub const PROMOTE_TO: usize = PAGE;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum List {
     Code(Code),
-    /// The 同音字 of a toneless syllable, e.g. "si".
+    /// The homophones of a toneless syllable, e.g. "si".
     Syllable(String),
 }
 
@@ -119,7 +119,7 @@ impl Promotions {
         true
     }
 
-    /// The 同音字 of `syllable` in learned order: `group` (the base order) with
+    /// The homophones of `syllable` in learned order: `group` (the base order) with
     /// the moves replayed.
     pub fn order(&self, syllable: &str, group: &[String]) -> Vec<String> {
         let mut order = group.to_vec();
@@ -134,7 +134,7 @@ impl Promotions {
     }
 
     /// `text`, at `index` of the learned order of `syllable`, was picked as a
-    /// 同音字. Returns whether the order (and so the log) changed.
+    /// homophone. Returns whether the order (and so the log) changed.
     pub fn record_homophone(&mut self, syllable: &str, index: usize, text: &str) -> bool {
         if index < PROMOTE_FROM {
             return false;

@@ -1,5 +1,5 @@
-//! Platform-independent core of a 字形 input method: the key
-//! state machine, the code and symbol tables, 自動調前 learning and 同音字.
+//! Platform-independent core of a shape-based Chinese input method: the key
+//! state machine, the code and symbol tables, auto-promotion and homophones.
 //!
 //! Nothing here touches a platform's input method framework. Each frontend
 //! (the Windows TSF text service, the macOS input method) feeds the engine

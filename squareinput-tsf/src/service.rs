@@ -24,7 +24,7 @@ use crate::{data, guard};
 #[derive(Clone, Copy)]
 enum Pad {
     Engine(Key),
-    /// Numpad `/`: switch between 字形 input and plain digits.
+    /// Numpad `/`: switch between shape input and plain digits.
     ToggleDigits,
     /// Numpad `*`: move the window between the bottom-right and top-right corners.
     MoveWindow,

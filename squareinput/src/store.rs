@@ -1,8 +1,8 @@
 //! The input method's data directory (see [`data_dir`]) and what lives in it:
 //!
-//! - `zixing.tsv`, `punct.tsv`: the tables (harvest TSV format)
-//! - `homophones.tsv`: the compact 同音字 list made by `squareinput-data`
-//! - `promotions.tsv`: the 自動調前 log, appended to by every process
+//! - `codes.tsv`, `punct.tsv`: the tables (harvest TSV format)
+//! - `homophones.tsv`: the compact homophone list made by `squareinput-data`
+//! - `promotions.tsv`: the auto-promotion log, appended to by every process
 //! - one-line settings such as `corner`
 //!
 //! Tables are read once per process and shared by all its threads. The
@@ -38,7 +38,7 @@ fn home(rest: &str) -> Option<PathBuf> {
 }
 
 /// The data directory: `SQUAREINPUT_DATA` if set (the test tools point it at
-/// a scratch copy so they never touch the real 自動調前 log), else
+/// a scratch copy so they never touch the real auto-promotion log), else
 /// `%APPDATA%\squareinput` on Windows, `~/Library/Application
 /// Support/squareinput` on macOS and `$XDG_DATA_HOME/squareinput` (by
 /// default `~/.local/share/squareinput`) elsewhere.
@@ -90,9 +90,9 @@ pub fn log(message: &str) {
 fn load() -> Result<Data, String> {
     let dir = data_dir().ok_or("no data directory (HOME or APPDATA is not set)")?;
     let read = |name: &str| std::fs::read_to_string(dir.join(name)).map_err(|e| format!("{name}: {e}"));
-    let table = CodeTable::from_tsv(&read("zixing.tsv")?, TAG).map_err(|e| format!("zixing.tsv: {e}"))?;
+    let table = CodeTable::from_tsv(&read("codes.tsv")?, TAG).map_err(|e| format!("codes.tsv: {e}"))?;
     let symbols = SymbolTable::from_tsv(&read("punct.tsv")?, TAG).map_err(|e| format!("punct.tsv: {e}"))?;
-    // 同音字 is optional.
+    // Homophones are optional.
     let homophones = read("homophones.tsv").map(|s| Homophones::from_compact(&s)).unwrap_or_default();
     Ok(Data { table, symbols: Arc::new(symbols), homophones: Arc::new(homophones) })
 }
@@ -129,7 +129,7 @@ pub fn write_setting(name: &str, value: &str) {
     }
 }
 
-/// Append one 自動調前 move to the shared log.
+/// Append one auto-promotion move to the shared log.
 pub fn save_promotion(line: &str) {
     let Some(dir) = data_dir() else { return };
     let result = OpenOptions::new().create(true).append(true).open(dir.join("promotions.tsv")).and_then(|mut f| f.write_all(line.as_bytes()));

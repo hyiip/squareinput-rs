@@ -1,4 +1,4 @@
-//! Square Input: a 字形 input method for Windows, as a TSF text service.
+//! Square Input: a shape-based Chinese input method for Windows, as a TSF text service.
 //!
 //! The DLL runs inside every application: every entry point catches panics; it
 //! never touches the network, the working directory or other processes; and
@@ -24,7 +24,7 @@ pub use sys::{DllCanUnloadNow, DllGetClassObject, DllRegisterServer, DllUnregist
 
 pub const CLSID_TEXT_SERVICE: GUID = GUID::from_u128(0x89B0ACE9_CFE0_4081_A7C3_7FBFB6082420);
 pub const GUID_PROFILE: GUID = GUID::from_u128(0x8D43BCFA_667D_4A00_9383_968A0E98609E);
-/// Registered under zh-TW; Windows lists it with the 中文(香港) keyboards.
+/// Registered under zh-TW; Windows lists it with the Chinese (Hong Kong) keyboards.
 pub const LANGID: u16 = 0x0404;
 pub const DESCRIPTION: &str = "Square Input";
 

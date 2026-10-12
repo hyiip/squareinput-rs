@@ -1,6 +1,6 @@
-//! 同音字: characters sharing a Cantonese syllable, ignoring tone, from
-//! Unihan's `kCantonese` readings (plus the 粵 readings in
-//! `kSMSZD2003Readings`, which add second readings such as 車 geoi1).
+//! Homophones: characters sharing a Cantonese syllable, ignoring tone, from
+//! Unihan's `kCantonese` readings (plus the Cantonese readings, marked 粵, in
+//! `kSMSZD2003Readings`, which add second readings such as geoi1 for 車).
 //!
 //! Two stages: [`compile`] turns Unihan, character frequency lists and the
 //! code table into a compact list (`char \t syllable syllable…`, most common
@@ -25,7 +25,7 @@ pub struct Homophones {
 
 /// How common characters are, from Unihan (lower is more common): 0-5 for the
 /// Hong Kong primary school grade a character is taught in (kGradeLevel),
-/// 6 for Big5 常用字 (level 1), 7 for Big5 次常用字 (level 2). Characters with
+/// 6 for Big5 level 1 (common characters), 7 for Big5 level 2 (less common). Characters with
 /// none of these are absent.
 pub fn unihan_tiers(dictionary_like: &str, other_mappings: &str) -> HashMap<String, u8> {
     let mut tiers: HashMap<String, u8> = HashMap::new();
@@ -70,8 +70,8 @@ fn unihan_readings(unihan: &str) -> HashMap<String, Vec<String>> {
             "kCantonese" => value.split_whitespace().filter_map(toneless).collect(),
             "kSMSZD2003Readings" => value
                 .split_whitespace()
-                .filter_map(|r| r.split_once('粵').map(|(_, yue)| yue))
-                .flat_map(|yue| yue.split(','))
+                .filter_map(|r| r.split_once('粵').map(|(_, cantonese)| cantonese))
+                .flat_map(|cantonese| cantonese.split(','))
                 .filter_map(toneless)
                 .collect(),
             _ => continue,
@@ -192,7 +192,7 @@ impl Homophones {
     }
 }
 
-/// 同音字 laid out for picking, from [`Homophones::layout`].
+/// Homophones laid out for picking, from [`Homophones::layout`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Layout {
     pub slots: Vec<Option<String>>,

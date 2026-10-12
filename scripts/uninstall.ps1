@@ -3,7 +3,7 @@
   Remove Square Input from the keyboard list and unregister the TSF DLL.
 
 .DESCRIPTION
-  Leaves %APPDATA%\squareinput (tables and the 自動調前 log) in place. Applications
+  Leaves %APPDATA%\squareinput (tables and the auto-promotion log) in place. Applications
   that still have the DLL loaded keep it until they restart.
 #>
 $ErrorActionPreference = 'Stop'

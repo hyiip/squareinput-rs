@@ -12,7 +12,7 @@
 //! - Big5 81xx, which no standard defines.
 //!
 //! On page 1 a character taken out leaves a blank cell, so the others keep
-//! their keys. From page 2 on, which 自動調前 reorders anyway, later
+//! their keys. From page 2 on, which auto-promotion reorders anyway, later
 //! characters move up.
 
 use std::collections::{HashMap, HashSet};
@@ -90,10 +90,10 @@ pub struct Cleaned {
     pub removed: usize,
 }
 
-/// One row of a 字形 code: (slot, text).
+/// One row of a shape code: (slot, text).
 type Row<'a> = (usize, &'a str);
 
-/// Rewrite the 字形 code rows of a harvest TSV without private-use characters.
+/// Rewrite the shape-code rows of a harvest TSV without private-use characters.
 /// A private-use entry becomes its standard character, unless there is none or
 /// the code already lists it. Every other line is copied unchanged.
 pub fn clean(tsv: &str) -> Cleaned {
