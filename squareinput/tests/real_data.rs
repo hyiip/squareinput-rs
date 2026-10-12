@@ -22,6 +22,56 @@ fn read(name: &str) -> Option<String> {
     }
 }
 
+/// 200,000 random numpad keys over the real tables, 同音字 and 自動調前
+/// included: the engine must never panic and its view must stay consistent.
+#[test]
+fn random_keys_keep_the_engine_consistent() {
+    let (Some(tsv), Some(punct), Some(readings), Some(dict), Some(other)) = (
+        read("zixing.tsv"),
+        read("punct.tsv"),
+        read(r"unihan\x\Unihan_Readings.txt"),
+        read(r"unihan\x\Unihan_DictionaryLikeData.txt"),
+        read(r"unihan\x\Unihan_OtherMappings.txt"),
+    ) else {
+        return;
+    };
+    let table = CodeTable::from_tsv(&tsv, "current").unwrap();
+    let homophones = Homophones::from_compact(&compile_homophones(&table, &readings, &dict, &other));
+    let symbols = SymbolTable::from_tsv(&punct, "current").unwrap();
+    let mut e = Engine::new(table, symbols).with_homophones(homophones);
+
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let (mut commits, mut learned) = (0, 0);
+    for _ in 0..200_000 {
+        let key = match next() % 14 {
+            n @ 0..=9 => Key::Digit(n as u8),
+            10 => Key::Dot,
+            11 => Key::Minus,
+            12 => Key::Plus,
+            // Extra weight on 0 (paging), the key with the most state.
+            _ => Key::Digit(0),
+        };
+        let wanted = e.wants(key);
+        let out = e.key(key);
+        assert_eq!(out.eaten, wanted, "wants() disagreed with key() for {key:?}");
+        if let Some(text) = &out.commit {
+            assert!(!text.is_empty());
+            commits += 1;
+        }
+        learned += usize::from(out.learned);
+        let v = e.view();
+        assert!(v.pages >= 1 && v.page < v.pages, "page {} of {}", v.page, v.pages);
+    }
+    eprintln!("200000 random keys: {commits} commits, {learned} 自動調前 moves, {} logged", e.promotions().len());
+    assert!(commits > 1000);
+}
+
 fn press(e: &mut Engine, keys: &str) -> String {
     keys.chars()
         .filter_map(|c| {
