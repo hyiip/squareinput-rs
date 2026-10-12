@@ -10,9 +10,10 @@
 # 2. Refreshes the data directory (~/Library/Application Support/squareinput,
 #    or $SQUAREINPUT_DATA). Where local/ holds the harvested tables they are
 #    rebuilt with squareinput-data. Elsewhere they are copied from tsv/:
-#    codes.tsv, punct.tsv, homophones.tsv and promotions.tsv, as the Windows
-#    install script leaves them in its tsv\. promotions.tsv only seeds a new
-#    data directory, so auto-promotions learnt here are never overwritten.
+#    codes.tsv, punct.tsv and homophones.tsv, as the Windows install script
+#    leaves them in its tsv\. The auto-promotion log is made by typing here;
+#    a promotions.tsv put in tsv/ by hand only seeds a new data directory,
+#    so auto-promotions learnt here are never overwritten.
 # 3. Replaces the installed .app and quits the running input method; macOS
 #    starts the new one, with the new data, when it is next used.
 #
@@ -43,7 +44,7 @@ install_data() {
         fi
         echo "copied the tables from tsv/ into $DATA_DIR"
     elif [[ ! -f "$DATA_DIR/codes.tsv" ]]; then
-        echo "note: no tables in local/ or tsv/: put codes.tsv, punct.tsv, homophones.tsv and promotions.tsv in tsv/" >&2
+        echo "note: no tables in local/ or tsv/: put codes.tsv, punct.tsv and homophones.tsv in tsv/" >&2
     fi
 }
 
