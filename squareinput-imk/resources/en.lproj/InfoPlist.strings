@@ -1,0 +1,5 @@
+/* Name in the input source list and the input menu */
+CFBundleName = "Square Input";
+CFBundleDisplayName = "Square Input";
+/* Input mode display name, keyed by the mode ID in Info.plist */
+"com.hyiip.inputmethod.SquareInput.Hant" = "Square Input";

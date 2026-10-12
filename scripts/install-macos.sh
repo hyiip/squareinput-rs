@@ -68,6 +68,8 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 lipo -create -output "$app/Contents/MacOS/$BIN" "${binaries[@]}"
 cp squareinput-imk/Info.plist "$app/Contents/Info.plist"
 cp squareinput-imk/resources/menu.pdf "$app/Contents/Resources/"
+# Display names, including the input mode's, keyed by its ID.
+cp -R squareinput-imk/resources/*.lproj "$app/Contents/Resources/"
 # Extended attributes (e.g. from iCloud folders) make codesign refuse the bundle.
 xattr -cr "$app"
 codesign --force --deep --sign - "$app"

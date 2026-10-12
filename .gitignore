@@ -2,9 +2,6 @@
 # Manuals, backups and harvested tables are third-party material: keep local, never commit.
 /local
 /dist
-# Built tables (third-party data too) to carry to another machine: the
-# install scripts fill it where local\ holds the tables and read it elsewhere.
-/tsv
 # The probe and harvest tools (and the e2e check built on them) stay on the
 # machine they were made for; they build on their own, outside the workspace.
 /probe
