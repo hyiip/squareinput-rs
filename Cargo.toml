@@ -1,3 +1,5 @@
 [workspace]
 resolver = "3"
 members = ["squareinput", "squareinput-tsf"]
+# Local-only, see .gitignore.
+exclude = ["probe"]

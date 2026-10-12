@@ -2,3 +2,6 @@
 # Manuals, backups and harvested tables are third-party material: keep local, never commit.
 /local
 /dist
+# The probe and harvest tools (and the e2e check built on them) stay on the
+# machine they were made for; they build on their own, outside the workspace.
+/probe
