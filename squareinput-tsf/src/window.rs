@@ -1,37 +1,21 @@
 //! The 3×3 candidate window: a topmost popup that never takes focus, drawn
 //! with GDI and parked in a right-hand corner of the work area of the monitor
-//! the user is typing on. It sits at a fixed spot instead of
-//! following the caret, and the grid mirrors the numpad: keys 7-9 on top, 1-3
-//! at the bottom. Numpad `*` moves it between the bottom-right and top-right
-//! corners; the choice is saved and shared by all applications.
+//! the user is typing on. It sits at a fixed spot instead of following the
+//! caret; its contents and layout come from [`squareinput::ui`]. Numpad `*`
+//! moves it between the bottom-right and top-right corners; the choice is
+//! saved and shared by all applications.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use squareinput::{Cell, View};
+use squareinput::View;
+use squareinput::ui::{self, Align, Font, HEIGHT, Item, MARGIN, Rgb, WIDTH};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use crate::labels::{COMPONENTS, FEATURES};
 use crate::sys::{self, Canvas};
-
-// Layout in 96-dpi pixels.
-const PAD: i32 = 6;
-const CELL: i32 = 62;
-const BOTTOM: i32 = 34;
-const LINE: i32 = 19;
-const WIDTH: i32 = PAD * 2 + CELL * 3;
-const HEIGHT: i32 = PAD + CELL * 3 + BOTTOM + PAD + LINE * 3 + PAD;
-const MARGIN: i32 = 12;
-
-const BACKGROUND: COLORREF = COLORREF(0x00F3_EFEC);
-const CELL_FILL: COLORREF = COLORREF(0x00FF_FFFF);
-const BORDER: COLORREF = COLORREF(0x00C8_C0BA);
-const INK: COLORREF = COLORREF(0x0020_2020);
-const MUTED: COLORREF = COLORREF(0x0070_6A66);
-const ACCENT: COLORREF = COLORREF(0x00B0_5A1E);
 
 const HAN_FONT: &str = "MingLiU_HKSCS";
 const UI_FONT: &str = "Microsoft JhengHei UI";
@@ -80,7 +64,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                     CONTENT.with(|c| {
                         let Ok(map) = c.try_borrow() else { return false };
                         let Some(content) = map.get(&key(hwnd)) else { return false };
-                        draw(&Painter { canvas }, content);
+                        draw(canvas, content);
                         true
                     })
                 });
@@ -104,88 +88,31 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
     }
 }
 
-/// Draws in 96-dpi layout units on a canvas.
-struct Painter<'a> {
-    canvas: &'a Canvas,
+fn colorref(Rgb(r, g, b): Rgb) -> COLORREF {
+    COLORREF(u32::from(r) | u32::from(g) << 8 | u32::from(b) << 16)
 }
 
-impl Painter<'_> {
-    fn px(&self, v: i32) -> i32 {
-        (v as f32 * self.canvas.scale).round() as i32
-    }
-
-    fn rect(&self, x: i32, y: i32, w: i32, h: i32) -> RECT {
-        RECT { left: self.px(x), top: self.px(y), right: self.px(x + w), bottom: self.px(y + h) }
-    }
-
-    fn fill(&self, r: &RECT, color: COLORREF) {
-        self.canvas.fill(r, color);
-    }
-
-    fn frame(&self, r: &RECT, color: COLORREF) {
-        self.canvas.frame(r, color);
-    }
-
-    fn text(&self, text: &str, r: &RECT, size: i32, face: &str, color: COLORREF, format: DRAW_TEXT_FORMAT) {
-        self.canvas.text(text, r, self.px(size), face, color, format);
-    }
-}
-
-fn draw(p: &Painter, content: &Content) {
-    let v = &content.view;
-    p.fill(&p.rect(0, 0, WIDTH, HEIGHT), BACKGROUND);
-
-    for key in 1..=9u8 {
-        let i = usize::from(key - 1);
-        let (col, row) = (i as i32 % 3, 2 - i as i32 / 3);
-        let (x, y) = (PAD + col * CELL, PAD + row * CELL);
-        let r = p.rect(x, y, CELL, CELL);
-        p.fill(&r, CELL_FILL);
-        p.frame(&r, BORDER);
-        if content.digits {
-            continue;
-        }
-        match &v.cells[i] {
-            Cell::Empty => {}
-            Cell::Text(t) => p.text(t, &r, if t.chars().count() > 1 { 22 } else { 34 }, HAN_FONT, INK, CENTERED),
-            Cell::Feature(f) => p.text(FEATURES[usize::from(*f - 1)], &r, 32, HAN_FONT, INK, CENTERED),
-            Cell::Component { feature, key } => {
-                let (glyph, examples) = COMPONENTS[usize::from(*feature - 1)][usize::from(*key - 1)];
-                p.text(glyph, &p.rect(x, y + 2, CELL, CELL - 18), 28, HAN_FONT, INK, CENTERED);
-                p.text(examples, &p.rect(x + 2, y + CELL - 18, CELL - 4, 16), 11, UI_FONT, MUTED, CENTERED);
+/// Draw [`ui::paint`]'s items, scaling its 96-dpi layout units to the monitor.
+fn draw(canvas: &Canvas, content: &Content) {
+    let px = |v: i32| (v as f32 * canvas.scale).round() as i32;
+    let rect = |r: ui::Rect| RECT { left: px(r.x), top: px(r.y), right: px(r.x + r.w), bottom: px(r.y + r.h) };
+    for item in ui::paint(&content.view, content.digits) {
+        match item {
+            Item::Fill(r, color) => canvas.fill(&rect(r), colorref(color)),
+            Item::Frame(r, color) => canvas.frame(&rect(r), colorref(color)),
+            Item::Text { text, rect: r, size, font, color, align } => {
+                let face = match font {
+                    Font::Han => HAN_FONT,
+                    Font::Ui => UI_FONT,
+                };
+                let format = match align {
+                    Align::Center => CENTERED,
+                    Align::Left => LEFT,
+                };
+                canvas.text(&text, &rect(r), px(size), face, colorref(color), format);
             }
-            Cell::More => p.text("其他", &r, 20, UI_FONT, ACCENT, CENTERED),
         }
     }
-
-    let y = PAD + CELL * 3;
-    let zero = p.rect(PAD, y, CELL * 2, BOTTOM);
-    let dot = p.rect(PAD + CELL * 2, y, CELL, BOTTOM);
-    for r in [&zero, &dot] {
-        p.fill(r, CELL_FILL);
-        p.frame(r, BORDER);
-    }
-    let (zero_label, dot_label) = if content.digits { ("", "") } else { (v.zero_label, v.dot_label) };
-    p.text(zero_label, &zero, 17, UI_FONT, INK, CENTERED);
-    p.text(dot_label, &dot, 15, UI_FONT, INK, CENTERED);
-
-    let y = y + BOTTOM + PAD;
-    let line = |n: i32| p.rect(PAD + 2, y + n * LINE, WIDTH - PAD * 2 - 4, LINE);
-    let hints = if content.digits { ["數字模式", "按 / 返回中文"] } else { v.hints };
-    p.text(hints[0], &line(0), 13, UI_FONT, INK, LEFT);
-    p.text(hints[1], &line(1), 13, UI_FONT, MUTED, LEFT);
-
-    let mut status = vec![if content.digits { "數字".to_owned() } else { "中".to_owned() }];
-    if v.homophone_armed {
-        status.push("同音".into());
-    }
-    if !v.typed.is_empty() {
-        status.push(v.typed.clone());
-    }
-    if v.pages > 1 {
-        status.push(format!("{}/{} 頁", v.page + 1, v.pages));
-    }
-    p.text(&status.join("　"), &line(2), 12, UI_FONT, ACCENT, LEFT);
 }
 
 pub struct CandidateWindow {

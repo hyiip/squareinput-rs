@@ -6,10 +6,9 @@
 //!
 //! `unsafe` is denied everywhere except `sys`, which holds the COM objects,
 //! the DLL exports and thin safe wrappers for the Windows APIs used.
+#![cfg(windows)]
 #![deny(unsafe_code)]
 
-mod data;
-mod labels;
 mod register;
 mod service;
 #[allow(unsafe_code)]
@@ -18,6 +17,7 @@ mod window;
 
 use std::panic::AssertUnwindSafe;
 
+pub(crate) use squareinput::store as data;
 use windows::core::GUID;
 
 pub use sys::{DllCanUnloadNow, DllGetClassObject, DllRegisterServer, DllUnregisterServer};

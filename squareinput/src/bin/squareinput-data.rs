@@ -5,7 +5,7 @@
 //!
 //! Usage: squareinput-data [--local DIR] [--out DIR]
 //!   --local  harvest and Unihan files (default: local, beside the workspace)
-//!   --out    data directory (default %APPDATA%\squareinput)
+//!   --out    data directory (default: the input method's, see store::data_dir)
 //!
 //! The promotions log in the output directory is left alone.
 
@@ -31,7 +31,7 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
 
 fn run() -> Result<(), String> {
     let mut local = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../local"));
-    let mut out = std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("squareinput")).ok_or("APPDATA is not set")?;
+    let mut out = squareinput::store::data_dir().ok_or("no data directory (HOME or APPDATA is not set)")?;
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         let value = args.next().ok_or(format!("{flag} needs a value"))?;

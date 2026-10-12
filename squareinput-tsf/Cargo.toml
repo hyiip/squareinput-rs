@@ -7,11 +7,12 @@ description = "字形 input method as a TSF text service"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[dependencies]
+# Windows only: elsewhere the crate is empty, so the workspace builds everywhere.
+[target.'cfg(windows)'.dependencies]
 squareinput = { path = "../squareinput" }
 windows-core = "0.62"
 
-[dependencies.windows]
+[target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
 features = [
     "Win32_Foundation",

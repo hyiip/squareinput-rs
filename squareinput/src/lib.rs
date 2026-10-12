@@ -1,14 +1,19 @@
 //! Platform-independent core of a 字形 input method: the key
 //! state machine, the code and symbol tables, 自動調前 learning and 同音字.
 //!
-//! Nothing here touches Windows. The TSF text service feeds it numpad keys
-//! and draws the [`View`] it returns.
+//! Nothing here touches a platform's input method framework. Each frontend
+//! (the Windows TSF text service, the macOS input method) feeds the engine
+//! numpad keys, draws the [`View`] it returns with [`ui::paint`], and keeps
+//! its data through [`store`].
 
 mod engine;
 mod homophone;
+pub mod labels;
 mod learn;
 mod pua;
+pub mod store;
 mod table;
+pub mod ui;
 
 pub use engine::{COMMON_CHARS, Cell, Engine, Key, Outcome, Screen, View};
 pub use homophone::{Homophones, Layout, compile as compile_homophones, unihan_tiers};

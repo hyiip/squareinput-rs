@@ -1,14 +1,15 @@
-//! Tables and learning data under `%APPDATA%\squareinput` (see [`data_dir`]):
+//! The input method's data directory (see [`data_dir`]) and what lives in it:
 //!
-//! - `zixing.tsv`, `punct.tsv`: the harvested tables (harvest TSV format)
+//! - `zixing.tsv`, `punct.tsv`: the tables (harvest TSV format)
 //! - `homophones.tsv`: the compact 同音字 list made by `squareinput-data`
 //! - `promotions.tsv`: the 自動調前 log, appended to by every process
+//! - one-line settings such as `corner`
 //!
 //! Tables are read once per process and shared by all its threads. The
-//! promotions log is re-read whenever a thread starts typing, so moves made in
-//! other applications are picked up.
+//! promotions log is re-read for every new engine, so moves made in other
+//! processes are picked up.
 //!
-//! Errors go to `%LOCALAPPDATA%\squareinput\squareinput.log`; without data the input
+//! Errors go to `squareinput.log` in [`log_dir`]; without data the input
 //! method stays inert and lets every key through.
 
 use std::fs::OpenOptions;
@@ -16,10 +17,11 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use squareinput::{CodeTable, Engine, Homophones, Promotions, SymbolTable};
+use crate::{CodeTable, Engine, Homophones, Promotions, SymbolTable};
 
 /// Rows of the harvest TSVs to use.
 const TAG: &str = "current";
+const NAME: &str = "squareinput";
 
 struct Data {
     table: CodeTable,
@@ -27,14 +29,45 @@ struct Data {
     homophones: Arc<Homophones>,
 }
 
-fn env_dir(var: &str) -> Option<PathBuf> {
-    std::env::var_os(var).map(|d| PathBuf::from(d).join("squareinput"))
+fn env_path(var: &str) -> Option<PathBuf> {
+    std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from)
 }
 
-/// The data directory: `SQUAREINPUT_DATA` if set (the test tools point it at a
-/// scratch copy so they never touch the real 自動調前 log), else `%APPDATA%\squareinput`.
-fn data_dir() -> Option<PathBuf> {
-    std::env::var_os("SQUAREINPUT_DATA").map(PathBuf::from).or_else(|| env_dir("APPDATA"))
+fn home(rest: &str) -> Option<PathBuf> {
+    env_path("HOME").map(|h| h.join(rest))
+}
+
+/// The data directory: `SQUAREINPUT_DATA` if set (the test tools point it at
+/// a scratch copy so they never touch the real 自動調前 log), else
+/// `%APPDATA%\squareinput` on Windows, `~/Library/Application
+/// Support/squareinput` on macOS and `$XDG_DATA_HOME/squareinput` (by
+/// default `~/.local/share/squareinput`) elsewhere.
+pub fn data_dir() -> Option<PathBuf> {
+    if let Some(dir) = env_path("SQUAREINPUT_DATA") {
+        return Some(dir);
+    }
+    let base = if cfg!(windows) {
+        env_path("APPDATA")
+    } else if cfg!(target_os = "macos") {
+        home("Library/Application Support")
+    } else {
+        env_path("XDG_DATA_HOME").or_else(|| home(".local/share"))
+    };
+    base.map(|b| b.join(NAME))
+}
+
+/// Where the log goes: `%LOCALAPPDATA%\squareinput` on Windows,
+/// `~/Library/Logs/squareinput` on macOS and `$XDG_STATE_HOME/squareinput`
+/// (by default `~/.local/state/squareinput`) elsewhere.
+pub fn log_dir() -> Option<PathBuf> {
+    let base = if cfg!(windows) {
+        env_path("LOCALAPPDATA")
+    } else if cfg!(target_os = "macos") {
+        home("Library/Logs")
+    } else {
+        env_path("XDG_STATE_HOME").or_else(|| home(".local/state"))
+    };
+    base.map(|b| b.join(NAME))
 }
 
 /// Log only when the SQUAREINPUT_DEBUG environment variable is set (the test tools set it).
@@ -46,7 +79,7 @@ pub fn debug(message: impl FnOnce() -> String) {
 }
 
 pub fn log(message: &str) {
-    let Some(dir) = env_dir("LOCALAPPDATA") else { return };
+    let Some(dir) = log_dir() else { return };
     let _ = std::fs::create_dir_all(&dir);
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(dir.join("squareinput.log")) {
         let exe = std::env::current_exe().ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
@@ -55,7 +88,7 @@ pub fn log(message: &str) {
 }
 
 fn load() -> Result<Data, String> {
-    let dir = data_dir().ok_or("APPDATA is not set")?;
+    let dir = data_dir().ok_or("no data directory (HOME or APPDATA is not set)")?;
     let read = |name: &str| std::fs::read_to_string(dir.join(name)).map_err(|e| format!("{name}: {e}"));
     let table = CodeTable::from_tsv(&read("zixing.tsv")?, TAG).map_err(|e| format!("zixing.tsv: {e}"))?;
     let symbols = SymbolTable::from_tsv(&read("punct.tsv")?, TAG).map_err(|e| format!("punct.tsv: {e}"))?;
