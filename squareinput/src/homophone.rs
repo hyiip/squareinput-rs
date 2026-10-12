@@ -2,10 +2,11 @@
 //! Unihan's `kCantonese` readings (plus the 粵 readings in
 //! `kSMSZD2003Readings`, which add second readings such as 車 geoi1).
 //!
-//! Two stages: [`compile`] turns Unihan and the code table into a compact list
-//! (`char \t syllable syllable…`, most common character first), which the
-//! input method loads with [`Homophones::from_compact`]. Parsing the 9 MB of
-//! Unihan text in every process that types would be far too slow.
+//! Two stages: [`compile`] turns Unihan, character frequency lists and the
+//! code table into a compact list (`char \t syllable syllable…`, most common
+//! character first), which the input method loads with
+//! [`Homophones::from_compact`]. Parsing the 9 MB of Unihan text in every
+//! process that types would be far too slow.
 
 use std::collections::HashMap;
 
@@ -88,26 +89,58 @@ fn unihan_readings(unihan: &str) -> HashMap<String, Vec<String>> {
     readings
 }
 
+/// Character frequencies from `char \t count` lists, each scaled to counts per
+/// million characters and multiplied by its weight, summed.
+pub fn frequencies(lists: &[(&str, f64)]) -> HashMap<String, f64> {
+    let mut freq: HashMap<String, f64> = HashMap::new();
+    for &(list, weight) in lists {
+        let counts: Vec<(&str, f64)> = list
+            .lines()
+            .filter_map(|line| {
+                let (ch, count) = line.split_once('\t')?;
+                Some((ch, count.trim().parse::<f64>().ok()?))
+            })
+            .collect();
+        let total: f64 = counts.iter().map(|&(_, n)| n).sum();
+        if total > 0.0 {
+            for (ch, n) in counts {
+                *freq.entry(ch.to_owned()).or_default() += weight * n * 1e6 / total;
+            }
+        }
+    }
+    freq
+}
+
 /// Compile the compact homophone list for the characters in `table`, most
-/// common first: by [`unihan_tiers`], then by position in the table.
-/// Characters not in the table are left out, so groups hold only characters
-/// the user can type (no simplified forms). Arguments are the
-/// texts of Unihan_Readings.txt, Unihan_DictionaryLikeData.txt and
+/// common first: by [`frequencies`] of `frequency_lists` (list text, weight),
+/// then, for characters the lists rank the same (mostly those they lack), by
+/// [`unihan_tiers`] and position in the table. Characters not in the table
+/// are left out, so groups hold only characters the user can type (no
+/// simplified forms). The other arguments are the texts of
+/// Unihan_Readings.txt, Unihan_DictionaryLikeData.txt and
 /// Unihan_OtherMappings.txt.
-pub fn compile(table: &CodeTable, readings: &str, dictionary_like: &str, other_mappings: &str) -> String {
+pub fn compile(
+    table: &CodeTable,
+    readings: &str,
+    dictionary_like: &str,
+    other_mappings: &str,
+    frequency_lists: &[(&str, f64)],
+) -> String {
     let tiers = unihan_tiers(dictionary_like, other_mappings);
+    let freq = frequencies(frequency_lists);
     let best = table.best_slots();
-    let mut rows: Vec<(usize, String, Vec<String>)> = unihan_readings(readings)
+    let mut rows: Vec<(f64, usize, String, Vec<String>)> = unihan_readings(readings)
         .into_iter()
         .filter(|(_, syllables)| !syllables.is_empty())
         .filter_map(|(ch, syllables)| {
             let slot = *best.get(ch.as_str())?;
             let tier = tiers.get(&ch).copied().unwrap_or(UNTIERED);
-            Some((usize::from(tier) * 1_000_000 + slot, ch, syllables))
+            let f = freq.get(&ch).copied().unwrap_or(0.0);
+            Some((f, usize::from(tier) * 1_000_000 + slot, ch, syllables))
         })
         .collect();
-    rows.sort();
-    rows.iter().map(|(_, ch, syllables)| format!("{ch}\t{}\n", syllables.join(" "))).collect()
+    rows.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| (a.1, &a.2).cmp(&(b.1, &b.2))));
+    rows.iter().map(|(_, _, ch, syllables)| format!("{ch}\t{}\n", syllables.join(" "))).collect()
 }
 
 impl Homophones {
@@ -137,18 +170,41 @@ impl Homophones {
     }
 
     /// Slots to pick a homophone of `ch` from: the characters of each of its
-    /// readings in turn (`ch` among them), each reading starting on a new page.
+    /// readings in turn (`ch` among them), each reading starting on a new page
+    /// and listed in the order `order` gives for its syllable and base order.
     /// Empty if `ch` has no reading.
-    pub fn slots(&self, ch: &str) -> Vec<Option<String>> {
-        let mut slots: Vec<Option<String>> = Vec::new();
+    pub fn layout(&self, ch: &str, order: impl Fn(&str, &[String]) -> Vec<String>) -> Layout {
+        let mut layout = Layout::default();
         for syllable in self.readings(ch) {
-            slots.extend(self.group(syllable).iter().cloned().map(Some));
-            slots.resize(slots.len().div_ceil(PAGE) * PAGE, None);
+            layout.starts.push((layout.slots.len(), syllable.clone()));
+            layout.slots.extend(order(syllable, self.group(syllable)).into_iter().map(Some));
+            layout.slots.resize(layout.slots.len().div_ceil(PAGE) * PAGE, None);
         }
-        while slots.last().is_some_and(Option::is_none) {
-            slots.pop();
+        while layout.slots.last().is_some_and(Option::is_none) {
+            layout.slots.pop();
         }
-        slots
+        layout
+    }
+
+    /// [`Homophones::layout`] slots in the base order.
+    pub fn slots(&self, ch: &str) -> Vec<Option<String>> {
+        self.layout(ch, |_, group| group.to_vec()).slots
+    }
+}
+
+/// 同音字 laid out for picking, from [`Homophones::layout`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Layout {
+    pub slots: Vec<Option<String>>,
+    /// Each reading and the slot its characters start at.
+    pub starts: Vec<(usize, String)>,
+}
+
+impl Layout {
+    /// The syllable `slot` belongs to and the slot's index within it.
+    pub fn locate(&self, slot: usize) -> Option<(&str, usize)> {
+        let (start, syllable) = self.starts.iter().rev().find(|(start, _)| *start <= slot)?;
+        Some((syllable, slot - start))
     }
 }
 
@@ -180,7 +236,18 @@ U+5C45\tkCantonese\tgeoi1
     }
 
     fn homophones() -> Homophones {
-        Homophones::from_compact(&compile(&table(), READINGS, DICT, OTHER))
+        Homophones::from_compact(&compile(&table(), READINGS, DICT, OTHER, &[]))
+    }
+
+    #[test]
+    fn frequency_lists_rank_first_and_tiers_break_ties() {
+        // 涐 is now the most frequent; 峨 and 餓 are absent, so tiers order them.
+        let lists = [("涐\t30\n我\t10\n", 1.0), ("我\t1\n俄\t1\n", 0.5)];
+        let f = frequencies(&lists);
+        assert_eq!(f["涐"], 750_000.0);
+        assert_eq!(f["我"], 250_000.0 + 250_000.0);
+        let h = Homophones::from_compact(&compile(&table(), READINGS, DICT, OTHER, &lists));
+        assert_eq!(h.group("ngo"), ["涐", "我", "餓", "峨"]);
     }
 
     #[test]
@@ -221,6 +288,10 @@ U+5C45\tkCantonese\tgeoi1
         assert_eq!(s[PAGE + 1].as_deref(), Some("居"));
         assert_eq!(s.len(), PAGE + 2);
         assert!(h.slots("x").is_empty());
+
+        let layout = h.layout("車", |_, group| group.to_vec());
+        assert_eq!(layout.locate(0), Some(("ce", 0)));
+        assert_eq!(layout.locate(PAGE + 1), Some(("geoi", 1)));
     }
 
     #[test]

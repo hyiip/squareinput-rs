@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use crate::homophone::Homophones;
+use crate::homophone::{Homophones, Layout};
 use crate::learn::Promotions;
 use crate::table::{Code, CodeTable, PAGE, SymbolTable};
 
@@ -124,7 +124,7 @@ enum State {
     Punctuation { page: usize },
     Menu,
     Symbols { list: u8, page: usize },
-    Homophones { slots: Vec<Option<String>>, page: usize },
+    Homophones { layout: Layout, page: usize },
     Common,
 }
 
@@ -256,15 +256,20 @@ impl Engine {
                 stay(S::Symbols { list, page: turn(page, len, key == Digit(0)) })
             }
 
-            (S::Homophones { slots, page }, Digit(k @ 1..=9)) => {
-                match slots.get(page * PAGE + k as usize - 1).cloned().flatten() {
-                    Some(text) => (S::Idle, Outcome::commit(text, false)),
-                    None => stay(S::Homophones { slots, page }),
+            (S::Homophones { layout, page }, Digit(k @ 1..=9)) => {
+                let slot = page * PAGE + k as usize - 1;
+                match layout.slots.get(slot).cloned().flatten() {
+                    Some(text) => {
+                        let learned =
+                            layout.locate(slot).is_some_and(|(syllable, i)| self.promotions.record_homophone(syllable, i, &text));
+                        (S::Idle, Outcome::commit(text, learned))
+                    }
+                    None => stay(S::Homophones { layout, page }),
                 }
             }
-            (S::Homophones { slots, page }, Digit(0) | Minus) => {
-                let page = turn(page, slots.len(), key == Digit(0));
-                stay(S::Homophones { slots, page })
+            (S::Homophones { layout, page }, Digit(0) | Minus) => {
+                let page = turn(page, layout.slots.len(), key == Digit(0));
+                stay(S::Homophones { layout, page })
             }
 
             (S::Common, Digit(k @ 1..=9)) => self.pick_char(COMMON_CHARS[k as usize - 1].to_owned()),
@@ -296,9 +301,9 @@ impl Engine {
     /// Commit `text`, or show its homophones if 同音字 is armed.
     fn pick_char(&mut self, text: String) -> (State, Outcome) {
         if std::mem::take(&mut self.armed) {
-            let slots = self.homophones.slots(&text);
-            if !slots.is_empty() {
-                return (State::Homophones { slots, page: 0 }, Outcome::eaten());
+            let layout = self.homophones.layout(&text, |syllable, group| self.promotions.order(syllable, group));
+            if !layout.slots.is_empty() {
+                return (State::Homophones { layout, page: 0 }, Outcome::eaten());
             }
         }
         (State::Idle, Outcome::commit(text, false))
@@ -396,12 +401,12 @@ impl Engine {
                 v.hints = PICK;
                 (v.page, v.pages) = (*page, page_count(slots.len()));
             }
-            S::Homophones { slots, page } => {
+            S::Homophones { layout, page } => {
                 v.screen = Screen::Homophones;
-                v.cells = text_cells(slots, *page);
+                v.cells = text_cells(&layout.slots, *page);
                 v.zero_label = "下　頁";
                 v.hints = ["選同音字", "或按下頁繼續找尋"];
-                (v.page, v.pages) = (*page, page_count(slots.len()));
+                (v.page, v.pages) = (*page, page_count(layout.slots.len()));
             }
             S::Common => {
                 v.screen = Screen::Common;
@@ -437,7 +442,7 @@ mod tests {
         let symbols = SymbolTable::from_tsv(&tsv, "t").unwrap();
         // Without tiers, 餓 (slot 0) and 鵝 (slot 1) rank before 我 (slot 6).
         let unihan = "U+6211\tkCantonese\tngo5\nU+9913\tkCantonese\tngo6\nU+9D5D\tkCantonese\tngo4\n";
-        let homophones = Homophones::from_compact(&crate::homophone::compile(&table, unihan, "", ""));
+        let homophones = Homophones::from_compact(&crate::homophone::compile(&table, unihan, "", "", &[]));
         Engine::new(table, symbols).with_homophones(homophones)
     }
 
@@ -583,6 +588,32 @@ mod tests {
         assert!(!v.homophone_armed);
         assert_eq!(type_keys(&mut e, "1"), "餓");
         assert_eq!(type_keys(&mut e, "9707"), "我");
+    }
+
+    #[test]
+    fn homophones_from_page_three_move_to_page_two_key_one() {
+        let chars: Vec<String> = (0..25).map(|i| char::from_u32(0x4E00 + i).unwrap().to_string()).collect();
+        let items: Vec<&str> = chars.iter().map(String::as_str).collect();
+        let table = CodeTable::from_tsv(&rows("110", &items), "t").unwrap();
+        let readings: String = (0..25).map(|i| format!("U+{:X}\tkCantonese\tsi1\n", 0x4E00 + i)).collect();
+        let homophones = Homophones::from_compact(&crate::homophone::compile(&table, &readings, "", "", &[]));
+        let mut e = Engine::new(table, SymbolTable::default()).with_homophones(homophones);
+
+        // Arm 同音字, type the first character, then page 3 key 2.
+        let out = ".921101002".chars().map(|c| e.key(key_of(c))).last().unwrap();
+        assert_eq!(out.commit.as_deref(), Some(chars[19].as_str()));
+        assert!(out.learned);
+        assert_eq!(e.promotions().last_line(), Some(format!("si\t{}\n", chars[19])));
+
+        // It is now page 2 key 1 of every character read si; page 1 is unchanged.
+        type_keys(&mut e, ".921105");
+        assert_eq!(e.view().cells[0], Cell::Text(chars[0].clone()));
+        type_keys(&mut e, "0");
+        assert_eq!(e.view().cells[0], Cell::Text(chars[19].clone()));
+        // Picking from page 2 learns nothing.
+        let out = e.key(Key::Digit(2));
+        assert_eq!(out.commit.as_deref(), Some(chars[9].as_str()));
+        assert!(!out.learned);
     }
 
     #[test]

@@ -1,7 +1,7 @@
-//! Build the input method's data directory from the harvested tables and
-//! Unihan: copies the 字形 table without its private-use characters and the
-//! punctuation table (after checking they load), and compiles the compact
-//! 同音字 list.
+//! Build the input method's data directory from the harvested tables, Unihan
+//! and character frequency lists: copies the 字形 table without its
+//! private-use characters and the punctuation table (after checking they
+//! load), and compiles the compact 同音字 list.
 //!
 //! Usage: squareinput-data [--local DIR] [--out DIR]
 //!   --local  harvest and Unihan files (default: local, beside the workspace)
@@ -15,6 +15,11 @@ use std::process::ExitCode;
 use squareinput::{CodeTable, Homophones, SymbolTable, clean_private_use, compile_homophones};
 
 const TAG: &str = "current";
+
+/// Character frequency lists in `freq` under the local directory, with their
+/// weights: Cantonese Wikipedia, and Common Voice zh-HK and yue sentences
+/// (spoken Hong Kong Cantonese, but a far smaller sample, so it counts half).
+const FREQUENCY_LISTS: [(&str, f64); 2] = [("zhyuewiki-chars.tsv", 1.0), ("commonvoice-chars.tsv", 0.5)];
 
 fn read(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
@@ -45,12 +50,23 @@ fn run() -> Result<(), String> {
         return Err(format!("unexpected tables: {} codes, {} punctuation slots", table.len(), symbols.slots(".").len()));
     }
 
+    // Frequency lists are optional: without them, Unihan alone ranks 同音字.
+    let mut lists = Vec::new();
+    for (name, weight) in FREQUENCY_LISTS {
+        match read(&local.join("freq").join(name)) {
+            Ok(text) => lists.push((text, weight)),
+            Err(e) => println!("skipping frequency list: {e}"),
+        }
+    }
+    let lists: Vec<(&str, f64)> = lists.iter().map(|(text, weight)| (text.as_str(), *weight)).collect();
+
     let unihan = local.join("unihan").join("x");
     let compact = compile_homophones(
         &table,
         &read(&unihan.join("Unihan_Readings.txt"))?,
         &read(&unihan.join("Unihan_DictionaryLikeData.txt"))?,
         &read(&unihan.join("Unihan_OtherMappings.txt"))?,
+        &lists,
     );
     let homophones = Homophones::from_compact(&compact);
 

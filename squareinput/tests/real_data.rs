@@ -27,6 +27,20 @@ fn zixing() -> Option<String> {
     read("zixing.tsv").map(|raw| clean_private_use(&raw).tsv)
 }
 
+/// The frequency lists squareinput-data ranks 同音字 by, those that are present.
+fn frequency_lists() -> Vec<(String, f64)> {
+    [("zhyuewiki-chars.tsv", 1.0), ("commonvoice-chars.tsv", 0.5)]
+        .into_iter()
+        .filter_map(|(name, weight)| Some((read(&format!(r"freq\{name}"))?, weight)))
+        .collect()
+}
+
+fn compile(table: &CodeTable, readings: &str, dict: &str, other: &str) -> String {
+    let lists = frequency_lists();
+    let lists: Vec<(&str, f64)> = lists.iter().map(|(text, weight)| (text.as_str(), *weight)).collect();
+    compile_homophones(table, readings, dict, other, &lists)
+}
+
 fn is_private_use(text: &str) -> bool {
     text.chars().any(|c| ('\u{E000}'..='\u{F8FF}').contains(&c))
 }
@@ -69,7 +83,7 @@ fn random_keys_keep_the_engine_consistent() {
         return;
     };
     let table = CodeTable::from_tsv(&tsv, "current").unwrap();
-    let homophones = Homophones::from_compact(&compile_homophones(&table, &readings, &dict, &other));
+    let homophones = Homophones::from_compact(&compile(&table, &readings, &dict, &other));
     let symbols = SymbolTable::from_tsv(&punct, "current").unwrap();
     let mut e = Engine::new(table, symbols).with_homophones(homophones);
 
@@ -187,7 +201,7 @@ fn homophones_of_wo_cover_the_common_ones() {
         return;
     };
     let table = CodeTable::from_tsv(&tsv, "current").unwrap();
-    let compact = compile_homophones(&table, &readings, &dict, &other);
+    let compact = compile(&table, &readings, &dict, &other);
     eprintln!("compact homophone list: {} chars, {} bytes", compact.lines().count(), compact.len());
     let h = Homophones::from_compact(&compact);
     let ours: Vec<String> = h.slots("我").into_iter().flatten().collect();

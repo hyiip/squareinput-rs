@@ -11,7 +11,7 @@ mod pua;
 mod table;
 
 pub use engine::{COMMON_CHARS, Cell, Engine, Key, Outcome, Screen, View};
-pub use homophone::{Homophones, compile as compile_homophones, unihan_tiers};
+pub use homophone::{Homophones, Layout, compile as compile_homophones, unihan_tiers};
 pub use learn::{PROMOTE_FROM, PROMOTE_TO, Promotions};
 pub use pua::{Cleaned, clean as clean_private_use};
 pub use table::{BLANK, Code, CodeTable, PAGE, SymbolTable, TableError};
