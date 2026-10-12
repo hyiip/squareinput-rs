@@ -56,11 +56,11 @@ impl RegKey {
     }
 
     fn set(&self, name: Option<&str>, value: &str) -> Result<()> {
-        let data: Vec<u16> = value.encode_utf16().chain(once(0)).collect();
-        let bytes = unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), data.len() * 2) };
+        // REG_SZ data: UTF-16LE with a terminating NUL.
+        let bytes: Vec<u8> = value.encode_utf16().chain(once(0)).flat_map(u16::to_le_bytes).collect();
         let name = name.map(HSTRING::from);
         let name = name.as_ref().map_or(PCWSTR::null(), |n| PCWSTR(n.as_ptr()));
-        unsafe { RegSetValueExW(self.0, name, None, REG_SZ, Some(bytes)).ok() }
+        unsafe { RegSetValueExW(self.0, name, None, REG_SZ, Some(&bytes)).ok() }
     }
 }
 

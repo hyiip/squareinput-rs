@@ -6,6 +6,7 @@
 //! corners; the choice is saved and shared by all applications.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -43,7 +44,16 @@ pub struct Content {
     pub digits: bool,
 }
 
-type Slot = RefCell<Option<Content>>;
+thread_local! {
+    /// What each candidate window of this thread shows, by window handle. A
+    /// window and its procedure always run on the thread that created it, so
+    /// a thread-local table needs no pointers stashed in the window itself.
+    static CONTENT: RefCell<HashMap<isize, Content>> = RefCell::default();
+}
+
+fn key(hwnd: HWND) -> isize {
+    hwnd.0 as isize
+}
 
 /// Setting file holding the corner ("top" or "bottom").
 const CORNER_SETTING: &str = "corner";
@@ -79,12 +89,6 @@ fn register_class() {
     });
 }
 
-fn slot<'a>(hwnd: HWND) -> Option<&'a Slot> {
-    let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const Slot;
-    // Set in `new` before the window is used and cleared on WM_NCDESTROY.
-    unsafe { ptr.as_ref() }
-}
-
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         match msg {
@@ -92,11 +96,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let painted = crate::guard(false, || {
                     let mut ps = PAINTSTRUCT::default();
                     let hdc = BeginPaint(hwnd, &mut ps);
-                    if let Some(content) = slot(hwnd).and_then(|s| s.try_borrow().ok())
-                        && let Some(content) = content.as_ref()
-                    {
-                        paint(hwnd, hdc, content);
-                    }
+                    CONTENT.with(|c| {
+                        if let Ok(map) = c.try_borrow()
+                            && let Some(content) = map.get(&key(hwnd))
+                        {
+                            paint(hwnd, hdc, content);
+                        }
+                    });
                     let _ = EndPaint(hwnd, &ps);
                     true
                 });
@@ -107,10 +113,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
             WM_NCDESTROY => {
-                let ptr = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) as *mut Slot;
-                if !ptr.is_null() {
-                    drop(Box::from_raw(ptr));
-                }
+                CONTENT.with(|c| {
+                    if let Ok(mut map) = c.try_borrow_mut() {
+                        map.remove(&key(hwnd));
+                    }
+                });
                 DefWindowProcW(hwnd, msg, wp, lp)
             }
             _ => DefWindowProcW(hwnd, msg, wp, lp),
@@ -268,18 +275,17 @@ impl CandidateWindow {
             )
             .inspect_err(|e| crate::data::log(&format!("cannot create the candidate window: {e}")))
             .ok()?;
-            let slot: Box<Slot> = Box::default();
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(slot) as isize);
             Some(CandidateWindow { hwnd })
         }
     }
 
     /// Show `content` in the chosen corner of the monitor the user is typing on.
     pub fn show(&self, content: Content) {
-        let Some(slot) = slot(self.hwnd) else { return };
-        if let Ok(mut s) = slot.try_borrow_mut() {
-            *s = Some(content);
-        }
+        CONTENT.with(|c| {
+            if let Ok(mut map) = c.try_borrow_mut() {
+                map.insert(key(self.hwnd), content);
+            }
+        });
         unsafe {
             if !IsWindowVisible(self.hwnd).as_bool() {
                 load_corner();
