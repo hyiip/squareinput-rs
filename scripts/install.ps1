@@ -3,8 +3,12 @@
   Build Square Input, refresh its data, and install the 64-bit and 32-bit TSF DLLs.
 
 .DESCRIPTION
-  1. Builds the DLL for x64 and x86 and rebuilds %APPDATA%\squareinput from the
-     harvested tables.
+  1. Builds the DLL for x64 and x86 and refreshes the data directory
+     (%APPDATA%\squareinput). Where local\ holds the harvested tables they are
+     rebuilt with squareinput-data, and the results (codes, punct, homophones
+     and the auto-promotion log) are copied to tsv\ to carry to another
+     machine. Elsewhere the tables come from tsv\; its promotions.tsv only
+     seeds a new data directory, so auto-promotions learnt here stay.
   2. Puts each DLL at its registered path (dist\squareinput.dll and
      dist\squareinput32.dll on a first install). Applications that loaded the old
      DLL keep it locked, but a loaded DLL can still be renamed, so the old file
@@ -31,9 +35,29 @@ function Invoke-Cargo([string[]]$CargoArgs) {
     if ($LASTEXITCODE) { throw "cargo $CargoArgs failed" }
 }
 
-Invoke-Cargo 'build', '--manifest-path', "$root\Cargo.toml", '--release', '-p', 'squareinput'
-& "$root\target\release\squareinput-data.exe"
-if ($LASTEXITCODE) { throw 'squareinput-data failed' }
+$data = if ($env:SQUAREINPUT_DATA) { $env:SQUAREINPUT_DATA } else { Join-Path $env:APPDATA 'squareinput' }
+$tsv = Join-Path $root 'tsv'
+$tables = 'codes.tsv', 'punct.tsv', 'homophones.tsv'
+if ((Test-Path "$root\local\codes.tsv") -and (Test-Path "$root\local\punct.tsv")) {
+    Invoke-Cargo 'build', '--manifest-path', "$root\Cargo.toml", '--release', '-p', 'squareinput'
+    & "$root\target\release\squareinput-data.exe"
+    if ($LASTEXITCODE) { throw 'squareinput-data failed' }
+    New-Item -ItemType Directory -Force $tsv | Out-Null
+    foreach ($name in $tables + 'promotions.tsv') {
+        if (Test-Path "$data\$name") { Copy-Item "$data\$name" $tsv -Force }
+    }
+} elseif ((Test-Path "$tsv\codes.tsv") -and (Test-Path "$tsv\punct.tsv")) {
+    New-Item -ItemType Directory -Force $data | Out-Null
+    foreach ($name in $tables) {
+        if (Test-Path "$tsv\$name") { Copy-Item "$tsv\$name" $data -Force }
+    }
+    if ((Test-Path "$tsv\promotions.tsv") -and -not (Test-Path "$data\promotions.tsv")) {
+        Copy-Item "$tsv\promotions.tsv" $data
+    }
+    Write-Host "copied the tables from tsv into $data"
+} elseif (-not (Test-Path "$data\codes.tsv")) {
+    Write-Warning "no tables in local\ or tsv\: put codes.tsv, punct.tsv, homophones.tsv and promotions.tsv in tsv\"
+}
 
 New-Item -ItemType Directory -Force $dist | Out-Null
 $installed = @()

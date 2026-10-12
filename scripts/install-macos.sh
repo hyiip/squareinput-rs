@@ -1,17 +1,20 @@
 #!/bin/bash
 # Build Square Input for macOS and install it into ~/Library/Input Methods.
 #
-#   scripts/install-macos.sh
+#   scripts/install-macos.sh              build, refresh the data, install
+#   scripts/install-macos.sh --data-only  only refresh the data
 #
 # 1. Builds squareinput-imk for Apple silicon and Intel and joins them with
 #    lipo, bundles the .app (Info.plist, menu icon) and signs it ad hoc:
 #    Apple silicon only loads signed code.
-# 2. Rebuilds the data directory (~/Library/Application Support/squareinput)
-#    with squareinput-data when the harvested tables are in local/. Otherwise
-#    copy codes.tsv, punct.tsv and homophones.tsv (and promotions.tsv, to keep
-#    the auto-promotions) there from another machine's data directory.
+# 2. Refreshes the data directory (~/Library/Application Support/squareinput,
+#    or $SQUAREINPUT_DATA). Where local/ holds the harvested tables they are
+#    rebuilt with squareinput-data. Elsewhere they are copied from tsv/:
+#    codes.tsv, punct.tsv, homophones.tsv and promotions.tsv, as the Windows
+#    install script leaves them in its tsv\. promotions.tsv only seeds a new
+#    data directory, so auto-promotions learnt here are never overwritten.
 # 3. Replaces the installed .app and quits the running input method; macOS
-#    starts the new one when it is next used.
+#    starts the new one, with the new data, when it is next used.
 #
 # First install: log out and back in, then add "Square Input" in System
 # Settings > Keyboard > Input Sources (Chinese, Traditional).
@@ -23,7 +26,33 @@ APP_NAME="Square Input"
 BIN=squareinput-imk
 TARGETS=(aarch64-apple-darwin x86_64-apple-darwin)
 INSTALL_DIR="$HOME/Library/Input Methods"
-DATA_DIR="$HOME/Library/Application Support/squareinput"
+DATA_DIR="${SQUAREINPUT_DATA:-$HOME/Library/Application Support/squareinput}"
+
+install_data() {
+    if [[ -f local/codes.tsv && -f local/punct.tsv ]]; then
+        cargo build --release -p squareinput --bin squareinput-data
+        target/release/squareinput-data
+    elif [[ -f tsv/codes.tsv && -f tsv/punct.tsv ]]; then
+        mkdir -p "$DATA_DIR"
+        cp tsv/codes.tsv tsv/punct.tsv "$DATA_DIR/"
+        if [[ -f tsv/homophones.tsv ]]; then
+            cp tsv/homophones.tsv "$DATA_DIR/"
+        fi
+        if [[ -f tsv/promotions.tsv && ! -f "$DATA_DIR/promotions.tsv" ]]; then
+            cp tsv/promotions.tsv "$DATA_DIR/"
+        fi
+        echo "copied the tables from tsv/ into $DATA_DIR"
+    elif [[ ! -f "$DATA_DIR/codes.tsv" ]]; then
+        echo "note: no tables in local/ or tsv/: put codes.tsv, punct.tsv, homophones.tsv and promotions.tsv in tsv/" >&2
+    fi
+}
+
+if [[ "${1:-}" == "--data-only" ]]; then
+    install_data
+    # The input method reads the tables once; restart it to pick them up.
+    killall "$BIN" 2>/dev/null || true
+    exit 0
+fi
 
 binaries=()
 for target in "${TARGETS[@]}"; do
@@ -42,12 +71,7 @@ cp squareinput-imk/resources/menu.pdf "$app/Contents/Resources/"
 xattr -cr "$app"
 codesign --force --deep --sign - "$app"
 
-if [[ -f local/codes.tsv && -f local/punct.tsv ]]; then
-    cargo build --release -p squareinput --bin squareinput-data
-    target/release/squareinput-data
-elif [[ ! -f "$DATA_DIR/codes.tsv" ]]; then
-    echo "note: no tables in local/ or $DATA_DIR; copy codes.tsv, punct.tsv and homophones.tsv there" >&2
-fi
+install_data
 
 mkdir -p "$INSTALL_DIR"
 rm -rf "$INSTALL_DIR/$APP_NAME.app"
