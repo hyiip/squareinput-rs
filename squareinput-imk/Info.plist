@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>squareinput-imk</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.hyiip.inputmethod.SquareInput</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Square Input</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSBackgroundOnly</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+
+	<!-- InputMethodKit: the connection name is the bundle identifier plus
+	     "_Connection" (main.rs derives it the same way), and the controller
+	     class is the one define_class! registers in controller.rs. -->
+	<key>InputMethodConnectionName</key>
+	<string>com.hyiip.inputmethod.SquareInput_Connection</string>
+	<key>InputMethodServerControllerClass</key>
+	<string>SquareInputController</string>
+	<key>InputMethodType</key>
+	<string>Keyboard</string>
+
+	<!-- How the system lists it: one Traditional Chinese input mode. -->
+	<key>TISInputSourceID</key>
+	<string>com.hyiip.inputmethod.SquareInput</string>
+	<key>TISIntendedLanguage</key>
+	<string>zh-Hant</string>
+	<key>tsInputMethodIconFileKey</key>
+	<string>menu.pdf</string>
+	<key>TISIconIsTemplate</key>
+	<true/>
+	<key>tsInputMethodCharacterRepertoireKey</key>
+	<array>
+		<string>Hant</string>
+	</array>
+	<key>ComponentInputModeDict</key>
+	<dict>
+		<key>tsInputModeListKey</key>
+		<dict>
+			<key>com.hyiip.inputmethod.SquareInput.Hant</key>
+			<dict>
+				<key>TISInputSourceID</key>
+				<string>com.hyiip.inputmethod.SquareInput.Hant</string>
+				<key>TISIntendedLanguage</key>
+				<string>zh-Hant</string>
+				<key>tsInputModeCharacterRepertoireKey</key>
+				<array>
+					<string>Hant</string>
+				</array>
+				<key>tsInputModeDefaultStateKey</key>
+				<true/>
+				<key>tsInputModeIsVisibleKey</key>
+				<true/>
+				<key>tsInputModeMenuIconFileKey</key>
+				<string>menu.pdf</string>
+				<key>tsInputModeAlternateMenuIconFileKey</key>
+				<string>menu.pdf</string>
+				<key>tsInputModePaletteIconFileKey</key>
+				<string>menu.pdf</string>
+				<key>tsInputModePrimaryInScriptKey</key>
+				<true/>
+				<key>tsInputModeScriptKey</key>
+				<string>smUnicodeScript</string>
+			</dict>
+		</dict>
+		<key>tsVisibleInputModeOrderedArrayKey</key>
+		<array>
+			<string>com.hyiip.inputmethod.SquareInput.Hant</string>
+		</array>
+	</dict>
+</dict>
+</plist>

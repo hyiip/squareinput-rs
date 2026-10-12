@@ -1,0 +1,33 @@
+[package]
+name = "squareinput-imk"
+version = "0.1.0"
+edition = "2024"
+description = "Shape-based Chinese input method for macOS (InputMethodKit)"
+
+# macOS only: elsewhere the binary just says so, so the workspace builds everywhere.
+[target.'cfg(target_os = "macos")'.dependencies]
+squareinput = { path = "../squareinput" }
+objc2 = "0.6.5"
+objc2-input-method-kit = "0.3.2"
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
+version = "0.3.2"
+features = ["NSAttributedString", "NSBundle", "NSDictionary", "NSGeometry", "NSObject", "NSRange", "NSString"]
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-app-kit]
+version = "0.3.2"
+features = [
+    "NSApplication",
+    "NSAttributedString",
+    "NSBezierPath",
+    "NSColor",
+    "NSEvent",
+    "NSFont",
+    "NSGraphics",
+    "NSPanel",
+    "NSResponder",
+    "NSScreen",
+    "NSStringDrawing",
+    "NSView",
+    "NSWindow",
+]
