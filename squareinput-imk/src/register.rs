@@ -8,13 +8,23 @@
 //! a fresh child process (`--finish-register`); and the system rescans a new
 //! bundle a few seconds after installing, which can undo the first attempt,
 //! so success is confirmed twice and the whole thing retried for a while.
+//!
+//! macOS 26 does not let TISEnableInputSource enable a third-party input
+//! method: the call succeeds and the source even reads as enabled, but
+//! nothing is saved and it cannot be selected. Only adding it in System
+//! Settings, which asks the user first, saves it. So enabled means saved in
+//! the user's preferences, and when it is not, `--register` exits with
+//! NEEDS_USER for the install script to send the user there.
 
 use std::ffi::c_void;
 use std::path::Path;
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
-use objc2_core_foundation::{CFArray, CFBoolean, CFDictionary, CFRetained, CFString, CFURL};
+use objc2_core_foundation::{
+    CFArray, CFBoolean, CFDictionary, CFPreferencesAppSynchronize, CFPreferencesCopyAppValue, CFRetained, CFString, CFType,
+    CFURL,
+};
 use objc2_foundation::NSBundle;
 
 /// An opaque input source (TISInputSourceRef).
@@ -44,6 +54,9 @@ pub const FINISH_FLAG: &str = "--finish-register";
 const ENABLED: i32 = 0;
 const NOT_ENABLED: i32 = 1;
 const SELECT_FAILED: i32 = 2;
+/// Enabled as far as TIS says, but not saved: the user has to add it. Also
+/// `--register`'s exit code for that.
+pub const NEEDS_USER: i32 = 3;
 
 /// Wait after enabling before reading back.
 const SETTLE: Duration = Duration::from_millis(1500);
@@ -81,6 +94,35 @@ fn is_enabled(source: *const TISInputSource) -> bool {
     }
 }
 
+/// Where enabled input sources are saved: third-party ones on macOS 26, and
+/// all of them before. Each is a list of dictionaries, one per source.
+const SAVED: [(&str, &str); 2] = [
+    ("com.apple.inputsources", "AppleEnabledThirdPartyInputSources"),
+    ("com.apple.HIToolbox", "AppleEnabledInputSources"),
+];
+
+/// Whether input mode `id` is saved as enabled in the user's preferences.
+fn saved_enabled(id: &str) -> bool {
+    let mode_key = CFString::from_str("Input Mode");
+    SAVED.iter().any(|&(domain, key)| {
+        let domain = CFString::from_str(domain);
+        CFPreferencesAppSynchronize(&domain);
+        let Some(value) = CFPreferencesCopyAppValue(&CFString::from_str(key), &domain) else { return false };
+        let Some(list) = value.downcast_ref::<CFArray>() else { return false };
+        (0..list.count()).any(|i| {
+            // SAFETY: indices are in range and the elements are CF objects;
+            // the dictionary lookup takes a CFString key and returns a value
+            // the dictionary owns, only read here.
+            unsafe {
+                let Some(entry) = list.value_at_index(i).cast::<CFType>().as_ref() else { return false };
+                let Some(entry) = entry.downcast_ref::<CFDictionary>() else { return false };
+                let mode = entry.value(CFRetained::as_ptr(&mode_key).as_ptr().cast()).cast::<CFType>();
+                mode.as_ref().and_then(|m| m.downcast_ref::<CFString>()).is_some_and(|m| m.to_string() == id)
+            }
+        })
+    })
+}
+
 /// Whether every source with ID `id` is enabled, as this process sees it.
 fn all_enabled(id: &str) -> bool {
     sources(id).is_some_and(|s| {
@@ -94,6 +136,24 @@ fn mode_id(bundle: &NSBundle) -> Option<String> {
     bundle.bundleIdentifier().map(|id| format!("{id}.Hant"))
 }
 
+/// Why `--register` did not enable the input source.
+enum Failure {
+    NeedsUser,
+    Error(String),
+}
+
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Failure::Error(message)
+    }
+}
+
+impl From<&str> for Failure {
+    fn from(message: &str) -> Self {
+        Failure::Error(message.into())
+    }
+}
+
 /// `--register`; returns the process exit code.
 pub fn register() -> i32 {
     match try_register() {
@@ -101,18 +161,22 @@ pub fn register() -> i32 {
             println!("{message}");
             0
         }
-        Err(message) => {
+        Err(Failure::NeedsUser) => {
+            eprintln!("registered Square Input, but macOS lets only System Settings enable it");
+            NEEDS_USER
+        }
+        Err(Failure::Error(message)) => {
             eprintln!("{message}");
             1
         }
     }
 }
 
-fn try_register() -> Result<String, String> {
+fn try_register() -> Result<String, Failure> {
     let bundle = NSBundle::mainBundle();
     let path = bundle.bundlePath().to_string();
     if !path.ends_with(".app") {
-        return Err(format!("not run from an .app: {path}"));
+        return Err(format!("not run from an .app: {path}").into());
     }
     let id = mode_id(&bundle).ok_or("no bundle identifier")?;
     let url = CFURL::from_file_path(Path::new(&path)).ok_or_else(|| format!("bad path: {path}"))?;
@@ -124,7 +188,7 @@ fn try_register() -> Result<String, String> {
         // SAFETY: a valid CFURL, only read.
         let status = unsafe { TISRegisterInputSource(CFRetained::as_ptr(&url)) };
         if status != 0 {
-            return Err(format!("TISRegisterInputSource failed ({status})"));
+            return Err(format!("TISRegisterInputSource failed ({status})").into());
         }
         if let Some(list) = sources(&id) {
             let list = each(&list);
@@ -132,7 +196,7 @@ fn try_register() -> Result<String, String> {
                 // SAFETY: from a live array.
                 let status = unsafe { TISEnableInputSource(source) };
                 if status != 0 {
-                    return Err(format!("TISEnableInputSource failed ({status})"));
+                    return Err(format!("TISEnableInputSource failed ({status})").into());
                 }
             }
             if !list.is_empty() {
@@ -143,13 +207,14 @@ fn try_register() -> Result<String, String> {
                         ENABLED if select => return Ok("registered, enabled and selected Square Input".into()),
                         ENABLED => return Ok("registered and enabled Square Input".into()),
                         SELECT_FAILED => return Ok("registered and enabled Square Input; pick it from the input menu".into()),
+                        NEEDS_USER => return Err(Failure::NeedsUser),
                         _ => {}
                     }
                 }
             }
         }
         if started.elapsed() > TIMEOUT {
-            return Err(format!("{id} did not become enabled within {} s", TIMEOUT.as_secs()));
+            return Err(format!("{id} did not become enabled within {} s", TIMEOUT.as_secs()).into());
         }
         std::thread::sleep(RETRY);
     }
@@ -164,13 +229,16 @@ fn finish_in_child(exe: &Path, id: &str, select: bool) -> Result<i32, String> {
 }
 
 /// `--finish-register <id> <select>`, in a fresh process: whether every source
-/// with ID `id` is enabled, selecting them if asked. Returns the exit code.
+/// with ID `id` is enabled and saved, selecting them if asked. Returns the exit code.
 pub fn finish(id: Option<String>, select: Option<String>) -> i32 {
     let Some(id) = id else { return NOT_ENABLED };
     let Some(list) = sources(&id) else { return NOT_ENABLED };
     let list = each(&list);
     if list.is_empty() || !list.iter().all(|&s| is_enabled(s)) {
         return NOT_ENABLED;
+    }
+    if !saved_enabled(&id) {
+        return NEEDS_USER;
     }
     if select.as_deref() == Some("1") {
         for &source in &list {

@@ -43,11 +43,16 @@ The script builds a universal app, signs it ad hoc, installs it into
 the input source, so there is no need to log out. On a first install it also
 switches to Square Input; later, switch with the input menu in the menu bar.
 
-If the script says it could not register the input source, add it by hand:
+macOS 26 lets only System Settings enable a third-party input method, so on
+a first install there the script opens System Settings at Keyboard instead.
+Add Square Input by hand:
 
-1. Log out and log back in.
-2. Open System Settings > Keyboard > Input Sources > Edit, press +, choose
-   Chinese, Traditional, then Square Input, and add it.
+1. Under Input Sources, press Edit, then +, choose Chinese, Traditional,
+   then Square Input, and add it. Allow it if macOS asks.
+2. Pick it from the input menu in the menu bar.
+
+If the script says it could not register the input source, log out and log
+back in first, then add it as above.
 
 To update, run `git pull` and then `scripts/install-macos.sh` again. If only
 the tables changed, `scripts/install-macos.sh --data-only` is enough.

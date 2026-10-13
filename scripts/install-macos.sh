@@ -19,9 +19,11 @@
 # 3. Replaces the installed .app and quits the running input method; macOS
 #    starts the new one, with the new data, when it is next used.
 # 4. Registers and enables the input source (squareinput-imk --register), so
-#    there is no need to log out; a first install also switches to it. If
-#    that fails, log out and back in, then add "Square Input" in System
-#    Settings > Keyboard > Input Sources (Chinese, Traditional).
+#    there is no need to log out; a first install also switches to it.
+#    macOS 26 lets only System Settings enable a third-party input method, so
+#    there the script opens it at Keyboard for "Square Input" to be added
+#    (Input Sources > Edit > +, Chinese, Traditional). If registering fails,
+#    log out and back in, then add it there.
 # Errors go to ~/Library/Logs/squareinput/squareinput.log.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -115,6 +117,16 @@ cache="$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null || true)"
 if [[ -n "$cache" ]]; then
     rm -f "$cache"com.apple.IntlDataCache.le* "$cache"*/com.apple.IntlDataCache.le* 2>/dev/null || true
 fi
-if ! "$INSTALL_DIR/$APP_NAME.app/Contents/MacOS/$BIN" --register; then
+status=0
+"$INSTALL_DIR/$APP_NAME.app/Contents/MacOS/$BIN" --register || status=$?
+case $status in
+0) ;;
+3)
+    # Exit code NEEDS_USER: registered, but only the user can enable it.
+    open "x-apple.systempreferences:com.apple.Keyboard-Settings.extension" 2>/dev/null || true
+    echo "to enable it: in System Settings > Keyboard > Input Sources, press Edit, then +, choose Chinese, Traditional, then Square Input, and add it" >&2
+    ;;
+*)
     echo "could not register the input source: log out and back in, then add Square Input in System Settings > Keyboard > Input Sources" >&2
-fi
+    ;;
+esac
