@@ -2,6 +2,7 @@
 //!
 //! - `codes.tsv`, `punct.tsv`: the tables (harvest TSV format)
 //! - `homophones.tsv`: the compact homophone list made by `squareinput-data`
+//! - `associations.tsv`: the compact list of associated characters, likewise
 //! - `promotions.tsv`: the auto-promotion log, appended to by every process
 //! - one-line settings such as `corner`
 //!
@@ -17,7 +18,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use crate::{CodeTable, Engine, Homophones, Promotions, SymbolTable};
+use crate::{Associations, CodeTable, Engine, Homophones, Promotions, SymbolTable};
 
 /// Rows of the harvest TSVs to use.
 const TAG: &str = "current";
@@ -27,6 +28,7 @@ struct Data {
     table: CodeTable,
     symbols: Arc<SymbolTable>,
     homophones: Arc<Homophones>,
+    associations: Arc<Associations>,
 }
 
 fn env_path(var: &str) -> Option<PathBuf> {
@@ -92,9 +94,10 @@ fn load() -> Result<Data, String> {
     let read = |name: &str| std::fs::read_to_string(dir.join(name)).map_err(|e| format!("{name}: {e}"));
     let table = CodeTable::from_tsv(&read("codes.tsv")?, TAG).map_err(|e| format!("codes.tsv: {e}"))?;
     let symbols = SymbolTable::from_tsv(&read("punct.tsv")?, TAG).map_err(|e| format!("punct.tsv: {e}"))?;
-    // Homophones are optional.
+    // Homophones and associated characters are optional.
     let homophones = read("homophones.tsv").map(|s| Homophones::from_compact(&s)).unwrap_or_default();
-    Ok(Data { table, symbols: Arc::new(symbols), homophones: Arc::new(homophones) })
+    let associations = read("associations.tsv").map(|s| Associations::from_compact(&s)).unwrap_or_default();
+    Ok(Data { table, symbols: Arc::new(symbols), homophones: Arc::new(homophones), associations: Arc::new(associations) })
 }
 
 fn data() -> Option<&'static Data> {
@@ -112,6 +115,7 @@ pub fn new_engine() -> Option<Engine> {
     Some(
         Engine::new(data.table.clone(), data.symbols.clone())
             .with_homophones(data.homophones.clone())
+            .with_associations(data.associations.clone())
             .with_promotions(promotions),
     )
 }

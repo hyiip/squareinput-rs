@@ -1,11 +1,13 @@
 //! Platform-independent core of a shape-based Chinese input method: the key
-//! state machine, the code and symbol tables, auto-promotion and homophones.
+//! state machine, the code and symbol tables, auto-promotion, homophones and
+//! associated characters.
 //!
 //! Nothing here touches a platform's input method framework. Each frontend
 //! (the Windows TSF text service, the macOS input method) feeds the engine
 //! numpad keys, draws the [`View`] it returns with [`ui::paint`], and keeps
 //! its data through [`store`].
 
+mod association;
 mod engine;
 mod homophone;
 pub mod labels;
@@ -15,6 +17,7 @@ pub mod store;
 mod table;
 pub mod ui;
 
+pub use association::{Associations, MAX_FOLLOWERS, compile as compile_associations};
 pub use engine::{COMMON_CHARS, Cell, Engine, Key, Outcome, Screen, View};
 pub use homophone::{Homophones, Layout, compile as compile_homophones, unihan_tiers};
 pub use learn::{PROMOTE_FROM, PROMOTE_TO, Promotions};

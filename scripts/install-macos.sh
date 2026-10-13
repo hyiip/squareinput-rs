@@ -12,10 +12,10 @@
 # 2. Refreshes the data directory (~/Library/Application Support/squareinput,
 #    or $SQUAREINPUT_DATA). Where local/ holds the harvested tables they are
 #    rebuilt with squareinput-data. Elsewhere they are copied from tsv/:
-#    codes.tsv, punct.tsv and homophones.tsv, as the Windows install script
-#    leaves them in its tsv\. The auto-promotion log is made by typing here;
-#    a promotions.tsv put in tsv/ by hand only seeds a new data directory,
-#    so auto-promotions learnt here are never overwritten.
+#    codes.tsv, punct.tsv, homophones.tsv and associations.tsv, as the
+#    Windows install script leaves them in its tsv\. The auto-promotion log is
+#    made by typing here; a promotions.tsv put in tsv/ by hand only seeds a
+#    new data directory, so auto-promotions learnt here are never overwritten.
 # 3. Replaces the installed .app and quits the running input method; macOS
 #    starts the new one, with the new data, when it is next used.
 # 4. Registers and enables the input source (squareinput-imk --register), so
@@ -39,15 +39,18 @@ install_data() {
     elif [[ -f tsv/codes.tsv && -f tsv/punct.tsv ]]; then
         mkdir -p "$DATA_DIR"
         cp tsv/codes.tsv tsv/punct.tsv "$DATA_DIR/"
-        if [[ -f tsv/homophones.tsv ]]; then
-            cp tsv/homophones.tsv "$DATA_DIR/"
-        fi
+        local optional
+        for optional in homophones.tsv associations.tsv; do
+            if [[ -f "tsv/$optional" ]]; then
+                cp "tsv/$optional" "$DATA_DIR/"
+            fi
+        done
         if [[ -f tsv/promotions.tsv && ! -f "$DATA_DIR/promotions.tsv" ]]; then
             cp tsv/promotions.tsv "$DATA_DIR/"
         fi
         echo "copied the tables from tsv/ into $DATA_DIR"
     elif [[ ! -f "$DATA_DIR/codes.tsv" ]]; then
-        echo "note: no tables in local/ or tsv/: put codes.tsv, punct.tsv and homophones.tsv in tsv/" >&2
+        echo "note: no tables in local/ or tsv/: put codes.tsv, punct.tsv, homophones.tsv and associations.tsv in tsv/" >&2
     fi
 }
 

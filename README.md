@@ -5,11 +5,11 @@ Windows (TSF) and macOS (InputMethodKit), written in Rust.
 
 | Path | What |
 |---|---|
-| `squareinput/` | The platform-independent core: key state machine, tables, homophones, auto-promotion, window layout, data directory |
+| `squareinput/` | The platform-independent core: key state machine, tables, homophones, associated characters, auto-promotion, window layout, data directory |
 | `squareinput-tsf/` | Windows text service (DLL) |
 | `squareinput-imk/` | macOS input method (.app) |
 | `scripts/` | Install and uninstall scripts |
-| `tsv/` | The tables it types from: `codes.tsv`, `punct.tsv`, `homophones.tsv` |
+| `tsv/` | The tables it types from: `codes.tsv`, `punct.tsv`, `homophones.tsv`, `associations.tsv` |
 
 ## Install on macOS
 
@@ -98,8 +98,12 @@ Everything is on the numeric keypad.
   the previous page.
 - **Cancel:** `.` cancels whatever is being typed.
 - **Punctuation:** when nothing is being typed, `.` opens punctuation. 0 also
-  opens it until something has been typed; after that, 0 shows the common
-  characters.
+  opens it until something has been typed.
+- **Associated characters:** after that, 0 shows the characters that most
+  often follow the last one typed inside a word, e.g. 港 蕉 味 after 香.
+  Press 1-9 to commit one, then 0 again to go on with the word. 0 and -
+  turn the pages. A character with none, such as punctuation, shows nine
+  common characters instead.
 - **More menu:** on punctuation page 1, key 9 opens it. 2 arms homophones:
   the next character you pick shows its homophones instead. 4-9 open the
   symbol lists.
@@ -115,6 +119,10 @@ The tables in `tsv/` are built on the machine that keeps the harvested source
 tables in `local/`, which is not in the repository. There, `scripts\install.ps1`
 rebuilds the data directory with `squareinput-data` and refreshes `tsv/`.
 Commit the changes so other machines get them.
+
+`associations.tsv` takes its words from CC-Canto and CC-CEDICT (both CC
+BY-SA). It ranks them by how often each pair of characters appears in
+Cantonese Wikipedia and Common Voice.
 
 Each machine keeps its own auto-promotion log, `promotions.tsv`, in its data
 directory. It is created by typing and is never overwritten by an install.

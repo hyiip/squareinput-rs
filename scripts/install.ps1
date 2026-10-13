@@ -5,8 +5,8 @@
 .DESCRIPTION
   1. Builds the DLL for x64 and x86 and refreshes the data directory
      (%APPDATA%\squareinput). Where local\ holds the harvested tables they are
-     rebuilt with squareinput-data, and the three tables (codes, punct,
-     homophones) are copied to tsv\ to carry to another machine. Elsewhere the
+     rebuilt with squareinput-data, and the tables (codes, punct, homophones,
+     associations) are copied to tsv\ to carry to another machine. Elsewhere the
      tables come from tsv\. The auto-promotion log is made by typing on each
      machine; a promotions.tsv put in tsv\ by hand only seeds a new data
      directory, so auto-promotions learnt here stay.
@@ -44,7 +44,7 @@ function Invoke-Cargo([string[]]$CargoArgs) {
 
 $data = if ($env:SQUAREINPUT_DATA) { $env:SQUAREINPUT_DATA } else { Join-Path $env:APPDATA 'squareinput' }
 $tsv = Join-Path $root 'tsv'
-$tables = 'codes.tsv', 'punct.tsv', 'homophones.tsv'
+$tables = 'codes.tsv', 'punct.tsv', 'homophones.tsv', 'associations.tsv'
 if ((Test-Path "$root\local\codes.tsv") -and (Test-Path "$root\local\punct.tsv")) {
     Invoke-Cargo 'build', '--manifest-path', "$root\Cargo.toml", '--release', '-p', 'squareinput'
     & "$root\target\release\squareinput-data.exe"
@@ -63,7 +63,7 @@ if ((Test-Path "$root\local\codes.tsv") -and (Test-Path "$root\local\punct.tsv")
     }
     Write-Host "copied the tables from tsv into $data"
 } elseif (-not (Test-Path "$data\codes.tsv")) {
-    Write-Warning "no tables in local\ or tsv\: put codes.tsv, punct.tsv and homophones.tsv in tsv\"
+    Write-Warning "no tables in local\ or tsv\: put codes.tsv, punct.tsv, homophones.tsv and associations.tsv in tsv\"
 }
 
 $installed = @()

@@ -4,7 +4,11 @@
 //!
 //! - Idle: 1-9 picks a left feature. `.` opens punctuation. `0` also opens
 //!   punctuation while nothing has been typed yet ("fresh"); afterwards it
-//!   picks from the nine common characters on the idle grid.
+//!   shows the characters associated with the last one committed, or the nine
+//!   common characters if there are none.
+//! - Associated characters: 1-9 commits, `0` is next page, `-` previous page.
+//!   A character picked here has associated characters of its own, so `0`
+//!   continues the word.
 //! - Feature: 1-9 picks a component.
 //! - Component: `0` completes a single-part code; 1-9 picks the right feature
 //!   of a split code.
@@ -23,11 +27,13 @@
 
 use std::sync::Arc;
 
+use crate::association::Associations;
 use crate::homophone::{Homophones, Layout};
 use crate::learn::Promotions;
 use crate::table::{Code, CodeTable, PAGE, SymbolTable};
 
-/// The common characters `0` offers once something has been typed, by key 1-9.
+/// The common characters `0` offers once something has been typed, by key
+/// 1-9, when the last commit has no associated characters.
 pub const COMMON_CHARS: [&str; 9] = ["個", "能", "的", "到", "資", "就", "你", "這", "好"];
 
 const PUNCTUATION: &str = ".";
@@ -72,6 +78,7 @@ pub enum Screen {
     Menu,
     Symbols,
     Homophones,
+    Associations,
     Common,
 }
 
@@ -128,6 +135,8 @@ enum State {
     Menu,
     Symbols { list: u8, page: usize },
     Homophones { layout: Layout, page: usize },
+    /// The characters associated with `of`.
+    Associations { of: String, page: usize },
     Common,
 }
 
@@ -148,10 +157,13 @@ pub struct Engine {
     table: CodeTable,
     symbols: Arc<SymbolTable>,
     homophones: Arc<Homophones>,
+    associations: Arc<Associations>,
     promotions: Promotions,
     state: State,
     fresh: bool,
     armed: bool,
+    /// The text committed last, whose associated characters `0` shows.
+    last: Option<String>,
 }
 
 impl Engine {
@@ -160,15 +172,22 @@ impl Engine {
             table,
             symbols: symbols.into(),
             homophones: Arc::default(),
+            associations: Arc::default(),
             promotions: Promotions::default(),
             state: State::Idle,
             fresh: true,
             armed: false,
+            last: None,
         }
     }
 
     pub fn with_homophones(mut self, homophones: impl Into<Arc<Homophones>>) -> Engine {
         self.homophones = homophones.into();
+        self
+    }
+
+    pub fn with_associations(mut self, associations: impl Into<Arc<Associations>>) -> Engine {
+        self.associations = associations.into();
         self
     }
 
@@ -192,10 +211,12 @@ impl Engine {
         self.is_composing() || matches!(key, Key::Digit(_) | Key::Dot)
     }
 
-    /// Abandon any composition, e.g. when focus moves to another field.
+    /// Abandon any composition, e.g. when focus moves to another field. The
+    /// last commit is forgotten too: it may not precede the caret any more.
     pub fn reset(&mut self) {
         self.state = State::Idle;
         self.armed = false;
+        self.last = None;
     }
 
     pub fn key(&mut self, key: Key) -> Outcome {
@@ -203,6 +224,9 @@ impl Engine {
         let (next, outcome) = self.step(state, key);
         if outcome.eaten {
             self.fresh = false;
+        }
+        if outcome.commit.is_some() {
+            self.last.clone_from(&outcome.commit);
         }
         self.state = next;
         outcome
@@ -215,7 +239,10 @@ impl Engine {
         match (state, key) {
             (S::Idle, Digit(f @ 1..=9)) => stay(S::Feature(f)),
             (S::Idle, Digit(0)) if self.fresh => stay(S::Punctuation { page: 0 }),
-            (S::Idle, Digit(0)) => stay(S::Common),
+            (S::Idle, Digit(0)) => match &self.last {
+                Some(of) if !self.associations.followers(of).is_empty() => stay(S::Associations { of: of.clone(), page: 0 }),
+                _ => stay(S::Common),
+            },
             (S::Idle, Dot) => stay(S::Punctuation { page: 0 }),
             (S::Idle, _) => (S::Idle, Outcome::passed()),
 
@@ -273,6 +300,17 @@ impl Engine {
             (S::Homophones { layout, page }, Digit(0) | Minus) => {
                 let page = turn(page, layout.slots.len(), key == Digit(0));
                 stay(S::Homophones { layout, page })
+            }
+
+            (S::Associations { of, page }, Digit(k @ 1..=9)) => {
+                match self.associations.followers(&of).get(page * PAGE + k as usize - 1).cloned() {
+                    Some(text) => self.pick_char(text),
+                    None => stay(S::Associations { of, page }),
+                }
+            }
+            (S::Associations { of, page }, Digit(0) | Minus) => {
+                let page = turn(page, self.associations.followers(&of).len(), key == Digit(0));
+                stay(S::Associations { of, page })
             }
 
             (S::Common, Digit(k @ 1..=9)) => self.pick_char(COMMON_CHARS[k as usize - 1].to_owned()),
@@ -411,6 +449,14 @@ impl Engine {
                 v.hints = ["選同音字", "或按下頁繼續找尋"];
                 (v.page, v.pages) = (*page, page_count(layout.slots.len()));
             }
+            S::Associations { of, page } => {
+                let followers = self.associations.followers(of);
+                v.screen = Screen::Associations;
+                v.cells = std::array::from_fn(|i| followers.get(page * PAGE + i).map_or(Cell::Empty, |t| Cell::Text(t.clone())));
+                v.zero_label = "下　頁";
+                v.hints = ["選關聯字", "或按下頁繼續找尋"];
+                (v.page, v.pages) = (*page, page_count(followers.len()));
+            }
             S::Common => {
                 v.screen = Screen::Common;
                 v.cells = fixed(COMMON_CHARS);
@@ -446,7 +492,8 @@ mod tests {
         // Without tiers, 餓 (slot 0) and 鵝 (slot 1) rank before 我 (slot 6).
         let unihan = "U+6211\tkCantonese\tngo5\nU+9913\tkCantonese\tngo6\nU+9D5D\tkCantonese\tngo4\n";
         let homophones = Homophones::from_compact(&crate::homophone::compile(&table, unihan, "", "", &[]));
-        Engine::new(table, symbols).with_homophones(homophones)
+        let associations = Associations::from_compact("快\t樂 速 捷 餐 遞 車 感 意 活 手\n我\t哋 們\n反\t餓\n");
+        Engine::new(table, symbols).with_homophones(homophones).with_associations(associations)
     }
 
     fn key_of(c: char) -> Key {
@@ -560,6 +607,63 @@ mod tests {
         assert_eq!(e.view().screen, Screen::Common);
         assert_eq!(e.view().cells[6], Cell::Text("你".into()));
         assert_eq!(type_keys(&mut e, "7"), "你");
+    }
+
+    #[test]
+    fn zero_after_a_commit_shows_its_associated_characters() {
+        let mut e = engine();
+        assert_eq!(type_keys(&mut e, "8922"), "快");
+        type_keys(&mut e, "0");
+        let v = e.view();
+        assert_eq!((v.screen, v.zero_label), (Screen::Associations, "下　頁"));
+        assert_eq!(v.cells[..3], [Cell::Text("樂".into()), Cell::Text("速".into()), Cell::Text("捷".into())]);
+        assert_eq!((v.page, v.pages), (0, 2));
+        // Page 2 holds 手 alone; an empty cell picks nothing.
+        type_keys(&mut e, "0");
+        assert_eq!(e.view().cells[0], Cell::Text("手".into()));
+        assert_eq!(type_keys(&mut e, "2"), "");
+        assert_eq!(type_keys(&mut e, "-2"), "速");
+        assert!(!e.is_composing());
+        // 速 has no associated characters, so `0` falls back to the common ones.
+        type_keys(&mut e, "0");
+        assert_eq!(e.view().screen, Screen::Common);
+    }
+
+    #[test]
+    fn associated_characters_chain_and_cancel() {
+        let mut e = engine();
+        assert_eq!(type_keys(&mut e, "9707"), "我");
+        assert_eq!(type_keys(&mut e, "01"), "哋");
+        type_keys(&mut e, "0");
+        assert_eq!(e.view().screen, Screen::Common);
+        type_keys(&mut e, ".");
+        assert_eq!(type_keys(&mut e, "9707"), "我");
+        // `.` cancels; 我 is still the last commit.
+        type_keys(&mut e, "0.0");
+        assert_eq!(e.view().screen, Screen::Associations);
+        // Punctuation is a commit too, with nothing associated.
+        assert_eq!(type_keys(&mut e, "..5"), "，");
+        type_keys(&mut e, "0");
+        assert_eq!(e.view().screen, Screen::Common);
+    }
+
+    #[test]
+    fn reset_forgets_the_last_commit() {
+        let mut e = engine();
+        assert_eq!(type_keys(&mut e, "8922"), "快");
+        e.reset();
+        type_keys(&mut e, "0");
+        assert_eq!(e.view().screen, Screen::Common);
+    }
+
+    #[test]
+    fn armed_homophones_apply_to_an_associated_character() {
+        let mut e = engine();
+        assert_eq!(type_keys(&mut e, "9701"), "反");
+        type_keys(&mut e, ".92");
+        assert_eq!(type_keys(&mut e, "01"), "");
+        assert_eq!(e.view().screen, Screen::Homophones);
+        assert_eq!(type_keys(&mut e, "2"), "鵝");
     }
 
     #[test]

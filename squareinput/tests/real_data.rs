@@ -5,7 +5,10 @@
 
 use std::path::PathBuf;
 
-use squareinput::{BLANK, Code, CodeTable, Engine, Homophones, Key, PAGE, SymbolTable, clean_private_use, compile_homophones};
+use squareinput::{
+    Associations, BLANK, Code, CodeTable, Engine, Homophones, Key, MAX_FOLLOWERS, PAGE, Screen, SymbolTable, clean_private_use, compile_associations,
+    compile_homophones,
+};
 
 fn local() -> PathBuf {
     std::env::var_os("SQUAREINPUT_LOCAL").map_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../local")), PathBuf::from)
@@ -41,6 +44,20 @@ fn compile(table: &CodeTable, readings: &str, dict: &str, other: &str) -> String
     compile_homophones(table, readings, dict, other, &lists)
 }
 
+/// Associated characters as squareinput-data compiles them, if the word lists are present.
+fn associations(table: &CodeTable) -> Option<Associations> {
+    let words = [r"lexicon\cccanto\cccanto-webdist.txt", r"lexicon\cccedict\cedict_ts.u8"].map(read);
+    let [Some(canto), Some(cedict)] = words else { return None };
+    let pairs: Vec<(String, f64)> = [("zhyuewiki-pairs.tsv", 1.0), ("commonvoice-pairs.tsv", 0.5)]
+        .into_iter()
+        .filter_map(|(name, weight)| Some((read(&format!(r"freq\{name}"))?, weight)))
+        .collect();
+    let pairs: Vec<(&str, f64)> = pairs.iter().map(|(text, weight)| (text.as_str(), *weight)).collect();
+    let lists = frequency_lists();
+    let lists: Vec<(&str, f64)> = lists.iter().map(|(text, weight)| (text.as_str(), *weight)).collect();
+    Some(Associations::from_compact(&compile_associations(table, &[canto.as_str(), cedict.as_str()], &pairs, &lists)))
+}
+
 fn is_private_use(text: &str) -> bool {
     text.chars().any(|c| ('\u{E000}'..='\u{F8FF}').contains(&c))
 }
@@ -69,8 +86,9 @@ fn private_use_characters_are_cleaned_out() {
     }
 }
 
-/// 200,000 random numpad keys over the real tables, homophones and auto-promotion
-/// included: the engine must never panic and its view must stay consistent.
+/// 200,000 random numpad keys over the real tables, homophones, associated
+/// characters (when the word lists are present) and auto-promotion included:
+/// the engine must never panic and its view must stay consistent.
 #[test]
 fn random_keys_keep_the_engine_consistent() {
     let (Some(tsv), Some(punct), Some(readings), Some(dict), Some(other)) = (
@@ -84,8 +102,9 @@ fn random_keys_keep_the_engine_consistent() {
     };
     let table = CodeTable::from_tsv(&tsv, "current").unwrap();
     let homophones = Homophones::from_compact(&compile(&table, &readings, &dict, &other));
+    let associations = associations(&table).unwrap_or_default();
     let symbols = SymbolTable::from_tsv(&punct, "current").unwrap();
-    let mut e = Engine::new(table, symbols).with_homophones(homophones);
+    let mut e = Engine::new(table, symbols).with_homophones(homophones).with_associations(associations);
 
     let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
     let mut next = || {
@@ -94,7 +113,7 @@ fn random_keys_keep_the_engine_consistent() {
         state ^= state << 17;
         state
     };
-    let (mut commits, mut learned) = (0, 0);
+    let (mut commits, mut learned, mut associated) = (0, 0, 0);
     for _ in 0..200_000 {
         let key = match next() % 14 {
             n @ 0..=9 => Key::Digit(n as u8),
@@ -114,9 +133,33 @@ fn random_keys_keep_the_engine_consistent() {
         learned += usize::from(out.learned);
         let v = e.view();
         assert!(v.pages >= 1 && v.page < v.pages, "page {} of {}", v.page, v.pages);
+        associated += usize::from(v.screen == Screen::Associations);
     }
-    eprintln!("200000 random keys: {commits} commits, {learned} auto-promotions, {} logged", e.promotions().len());
+    eprintln!(
+        "200000 random keys: {commits} commits, {learned} auto-promotions, {} logged, {associated} views of associated characters",
+        e.promotions().len()
+    );
     assert!(commits > 1000);
+}
+
+#[test]
+fn associated_characters_make_words() {
+    let Some(tsv) = codes() else { return };
+    let table = CodeTable::from_tsv(&tsv, "current").unwrap();
+    let Some(a) = associations(&table) else { return };
+    eprintln!("associated characters for {} characters", a.len());
+    assert!(a.len() > 5000, "{}", a.len());
+    for (ch, first) in [("香", "港"), ("我", "哋"), ("電", "視"), ("唔", "係"), ("中", "國")] {
+        eprintln!("{ch}: {}", a.followers(ch).concat());
+        assert_eq!(a.followers(ch).first().map(String::as_str), Some(first), "{ch}");
+        assert!(a.followers(ch).len() <= MAX_FOLLOWERS);
+    }
+    // Running text often has 國 then 嘅, but never inside a word.
+    assert!(!a.followers("國").iter().any(|c| c == "嘅"));
+
+    let mut e = Engine::new(table, SymbolTable::default()).with_associations(a);
+    assert_eq!(press(&mut e, "8101"), "中");
+    assert_eq!(press(&mut e, "01"), "國");
 }
 
 fn press(e: &mut Engine, keys: &str) -> String {
