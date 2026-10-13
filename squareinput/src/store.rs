@@ -4,7 +4,7 @@
 //! - `homophones.tsv`: the compact homophone list made by `squareinput-data`
 //! - `associations.tsv`: the compact list of associated characters, likewise
 //! - `promotions.tsv`: the auto-promotion log, appended to by every process
-//! - one-line settings such as `corner`
+//! - one-line settings such as `corner` and `mode`
 //!
 //! Tables are read once per process and shared by all its threads. The
 //! promotions log is re-read for every new engine, so moves made in other
@@ -131,6 +131,20 @@ pub fn write_setting(name: &str, value: &str) {
     if let Err(e) = std::fs::write(dir.join(name), value) {
         log(&format!("cannot save {name}: {e}"));
     }
+}
+
+/// Setting holding the mode, "chinese" or "english".
+const MODE: &str = "mode";
+
+/// Whether the user has switched to English with a tap of Shift (see
+/// [`crate::ShiftTap`]). Frontends re-read it when focus moves, so a switch
+/// in one application carries over to the next.
+pub fn english() -> bool {
+    read_setting(MODE).as_deref() == Some("english")
+}
+
+pub fn save_english(english: bool) {
+    write_setting(MODE, if english { "english" } else { "chinese" });
 }
 
 /// Append one auto-promotion move to the shared log.

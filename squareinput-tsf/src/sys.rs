@@ -14,7 +14,7 @@
 //! (the class factory, `DllGetClassObject` and the input mode button), where
 //! COM supplies them and they are checked for null first.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::iter::once;
 use std::mem::ManuallyDrop;
@@ -79,23 +79,41 @@ impl IClassFactory_Impl for Factory_Impl {
 
 // ---- Input mode button ------------------------------------------------------
 
-/// Resource id of the icon that build.rs embeds.
+/// Resource ids of the icons that build.rs embeds: the grid, and 英 for English.
 const ICON_ID: usize = 1;
+const ENGLISH_ICON_ID: usize = 2;
 
 /// The only cookie [`ModeButton`] hands out: it takes a single sink.
 const SINK_COOKIE: u32 = 1;
 
 /// The input mode button: TSF shows its icon on the taskbar while we are the
-/// active text service. It only shows the icon; clicking it does nothing.
+/// active text service, the grid in Chinese and 英 in English. It only shows
+/// the icon; clicking it does nothing.
 #[implement(ITfLangBarItemButton, ITfSource)]
 pub struct ModeButton {
     sink: RefCell<Option<ITfLangBarItemSink>>,
+    english: Cell<bool>,
 }
 
 impl ModeButton {
-    pub fn new() -> ModeButton {
-        ModeButton { sink: RefCell::default() }
+    pub fn new(english: bool) -> ComObject<ModeButton> {
+        ComObject::new(ModeButton { sink: RefCell::default(), english: Cell::new(english) })
     }
+
+    /// Show the icon for `english`, telling TSF if it changed.
+    pub fn show_english(&self, english: bool) {
+        if self.english.replace(english) == english {
+            return;
+        }
+        let sink = self.sink.try_borrow().ok().and_then(|s| s.clone());
+        if let Some(sink) = sink {
+            let _ = unsafe { sink.OnUpdate(TF_LBI_ICON) };
+        }
+    }
+}
+
+pub fn langbar_item(button: &ComObject<ModeButton>) -> ITfLangBarItem {
+    button.to_interface::<ITfLangBarItemButton>().into()
 }
 
 impl ITfLangBarItem_Impl for ModeButton_Impl {
@@ -152,7 +170,8 @@ impl ITfLangBarItemButton_Impl for ModeButton_Impl {
     fn GetIcon(&self) -> Result<HICON> {
         guard(Err(E_UNEXPECTED.into()), || {
             let size = unsafe { GetSystemMetrics(SM_CXSMICON) };
-            let name = PCWSTR(std::ptr::without_provenance(ICON_ID));
+            let id = if self.english.get() { ENGLISH_ICON_ID } else { ICON_ID };
+            let name = PCWSTR(std::ptr::without_provenance(id));
             let icon = unsafe { LoadImageW(Some(module().into()), name, IMAGE_ICON, size, size, LR_DEFAULTCOLOR) }?;
             Ok(HICON(icon.0))
         })

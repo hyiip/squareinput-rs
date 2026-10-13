@@ -111,6 +111,11 @@ Everything is on the numeric keypad.
   symbol lists.
 - **Other keys:** `/` switches between Chinese and plain digits. `*` moves
   the window between the bottom-right and top-right corners.
+- **English:** tap Shift on its own to switch to English and back. In
+  English every key goes straight to the application and the window hides;
+  on Windows the taskbar icon shows 英. Shift held for half a second or more,
+  or pressed together with another key, switches nothing. The mode carries
+  over to other applications and is remembered.
 - **Auto-promotion:** a character picked from page 3 or later moves to page
   2, key 1. Pages 1 and 2 never move. Homophones learn the same way, per
   reading.

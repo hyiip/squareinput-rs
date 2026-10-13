@@ -4,18 +4,20 @@
 //! Only numeric keypad keys are handled, as on Windows: digits, `.`, `-` and
 //! `+` go to the engine, `/` switches between shape input and plain digits,
 //! `*` moves the window between the bottom-right and top-right corners. Keys
-//! with Command, Control or Option held always pass through.
+//! with Command, Control or Option held always pass through. A tap of Shift
+//! switches to English, where every key passes through and the window hides.
 
 use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::time::Instant;
 
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::AnyObject;
 use objc2::{MainThreadMarker, define_class, msg_send};
-use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags, NSEventType};
 use objc2_foundation::{NSNotFound, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString};
 use objc2_input_method_kit::{IMKInputController, IMKServer};
-use squareinput::{Engine, Key, store};
+use squareinput::{Engine, Key, ShiftTap, store};
 
 use crate::window::CandidateWindow;
 
@@ -49,6 +51,9 @@ fn pad_key(code: u16) -> Option<Pad> {
     })
 }
 
+/// The Shift keys by virtual key code (kVK_Shift, kVK_RightShift).
+const SHIFT_KEYS: [u16; 2] = [0x38, 0x3C];
+
 #[derive(Default)]
 struct State {
     /// Created on first use; stays None (inert) if the data cannot be loaded.
@@ -56,6 +61,9 @@ struct State {
     engine_failed: bool,
     window: Option<CandidateWindow>,
     digits: bool,
+    /// Switched to English: every key passes through and the window hides.
+    english: bool,
+    shift: ShiftTap,
     /// A session is active: the user is typing with this input method.
     active: bool,
 }
@@ -88,6 +96,9 @@ impl State {
 
     /// The pad action if we would eat the key.
     fn decide(&mut self, pad: Pad) -> Option<Pad> {
+        if self.english {
+            return None;
+        }
         let digits = self.digits;
         let engine = self.engine()?;
         match pad {
@@ -106,7 +117,7 @@ impl State {
 
     /// Show the window while a session is active, near the caret of `client`.
     fn refresh(&mut self, mtm: MainThreadMarker, client: Option<&AnyObject>) {
-        if self.active && self.engine().is_some() {
+        if self.active && !self.english && self.engine().is_some() {
             let view = self.engine.as_ref().map(Engine::view);
             let window = self.window.get_or_insert_with(|| CandidateWindow::new(mtm));
             if let Some(view) = view {
@@ -142,12 +153,40 @@ fn caret(client: &AnyObject) -> NSRect {
     rect
 }
 
-fn handle(event: &NSEvent, client: &AnyObject) -> bool {
-    if event.r#type() != NSEventType::KeyDown {
-        return false;
-    }
+fn chord_held(event: &NSEvent) -> bool {
     let chord = NSEventModifierFlags::Command | NSEventModifierFlags::Control | NSEventModifierFlags::Option;
-    if event.modifierFlags().intersects(chord) {
+    event.modifierFlags().intersects(chord)
+}
+
+/// A modifier went down or up: a tap of Shift alone switches between Chinese
+/// and English. The application still gets the event.
+fn flags_changed(event: &NSEvent, client: &AnyObject) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    with(|s| {
+        if !SHIFT_KEYS.contains(&event.keyCode()) || chord_held(event) {
+            s.shift.interrupt();
+        } else if event.modifierFlags().contains(NSEventModifierFlags::Shift) {
+            s.shift.press(Instant::now());
+        } else if s.shift.release(Instant::now()) {
+            s.english = !s.english;
+            store::save_english(s.english);
+            s.reset();
+            s.refresh(mtm, Some(client));
+        }
+    });
+}
+
+fn handle(event: &NSEvent, client: &AnyObject) -> bool {
+    match event.r#type() {
+        NSEventType::KeyDown => {}
+        NSEventType::FlagsChanged => {
+            flags_changed(event, client);
+            return false;
+        }
+        _ => return false,
+    }
+    with(|s| s.shift.interrupt());
+    if chord_held(event) {
         return false;
     }
     let (Some(pad), Some(mtm)) = (pad_key(event.keyCode()), MainThreadMarker::new()) else { return false };
@@ -187,12 +226,18 @@ fn handle(event: &NSEvent, client: &AnyObject) -> bool {
     true
 }
 
-/// A session starts or ends: show or hide the window, dropping any code being typed.
+/// A session starts or ends: show or hide the window, dropping any code being
+/// typed and any Shift being held. A starting session picks up the mode saved
+/// when the input method last ran.
 fn set_active(active: bool, client: Option<&AnyObject>) {
     let Some(mtm) = MainThreadMarker::new() else { return };
     with(|s| {
         s.active = active;
+        if active {
+            s.english = store::english();
+        }
         s.reset();
+        s.shift.interrupt();
         s.refresh(mtm, client);
     });
 }
@@ -217,6 +262,12 @@ define_class!(
             let this = this.set_ivars(());
             // SAFETY: forwards IMK's own arguments to the superclass initializer.
             unsafe { msg_send![super(this), initWithServer: server, delegate: delegate, client: client] }
+        }
+
+        /// Key presses, and modifier changes to watch for a tap of Shift.
+        #[unsafe(method(recognizedEvents:))]
+        fn recognized_events(&self, _sender: Option<&AnyObject>) -> usize {
+            (NSEventMask::KeyDown | NSEventMask::FlagsChanged).bits() as usize
         }
 
         /// Every key event; returning true keeps it from the application.

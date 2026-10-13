@@ -1,6 +1,8 @@
 //! The TSF text service: takes numpad keys, runs them through the engine,
-//! inserts committed text and keeps the candidate window in step. The COM
-//! objects are declared in `sys`; their interface methods are here.
+//! inserts committed text and keeps the candidate window in step. A tap of
+//! Shift switches to English, where every key passes through and the window
+//! hides. The COM objects are declared in `sys`; their interface methods are
+//! here.
 //!
 //! Every COM method body runs under `guard`, so a panic can never unwind into
 //! the host application. No `RefCell` borrow is held while calling into TSF,
@@ -9,8 +11,9 @@
 
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::time::Instant;
 
-use squareinput::{Engine, Key};
+use squareinput::{Engine, Key, ShiftTap};
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::TextServices::*;
@@ -46,18 +49,28 @@ fn chord_held() -> bool {
     [VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN].into_iter().any(sys::key_held)
 }
 
+fn is_shift(vk: u16) -> bool {
+    [VK_SHIFT, VK_LSHIFT, VK_RSHIFT].contains(&VIRTUAL_KEY(vk))
+}
+
+/// Bit 30 of a key message's lParam: the key was already down (an auto-repeat).
+const REPEAT: isize = 1 << 30;
+
 #[derive(Default)]
 pub(crate) struct State {
     thread_mgr: Option<ITfThreadMgr>,
     client_id: u32,
     sink_cookies: Vec<u32>,
     /// The input mode button, added to the language bar while active.
-    mode_button: Option<ITfLangBarItem>,
+    mode_button: Option<ComObject<ModeButton>>,
     /// Created on first use; stays None (inert) if the data cannot be loaded.
     engine: Option<Engine>,
     engine_failed: bool,
     window: Option<CandidateWindow>,
     digits: bool,
+    /// Switched to English: every key passes through and the window hides.
+    english: bool,
+    shift: ShiftTap,
     /// A document of this thread has TSF focus.
     doc_focus: bool,
     /// We are the active keyboard text service.
@@ -79,7 +92,7 @@ impl State {
 
     /// The pad action if we would eat `vk`.
     fn decide(&mut self, vk: u16) -> Option<Pad> {
-        if chord_held() {
+        if self.english || chord_held() {
             return None;
         }
         let pad = pad_key(vk)?;
@@ -99,9 +112,33 @@ impl State {
         }
     }
 
+    /// Focus moved: drop the code being typed and any Shift being held, and
+    /// pick up a switch to or from English made in another application.
+    fn sync(&mut self) {
+        self.reset();
+        self.shift.interrupt();
+        self.english = data::english();
+    }
+
+    /// Watch for a tap of Shift alone; `lparam` is the key message's.
+    fn track_down(&mut self, vk: u16, lparam: LPARAM) {
+        if !is_shift(vk) || chord_held() {
+            self.shift.interrupt();
+        } else if lparam.0 & REPEAT == 0 {
+            self.shift.press(Instant::now());
+        }
+    }
+
+    fn set_english(&mut self, english: bool) {
+        self.english = english;
+        data::save_english(english);
+        self.reset();
+        self.refresh();
+    }
+
     /// Show the window while the user can type into one of our documents.
     fn refresh(&mut self) {
-        let active = self.doc_focus && self.foreground && self.thread_focus;
+        let active = self.doc_focus && self.foreground && self.thread_focus && !self.english;
         if active && self.engine().is_some() {
             if self.window.is_none() {
                 self.window = CandidateWindow::new();
@@ -125,6 +162,29 @@ impl TextService {
     fn with<R>(&self, f: impl FnOnce(&mut State) -> R) -> Option<R> {
         self.state.try_borrow_mut().ok().map(|mut s| f(&mut s))
     }
+
+    /// Like [`with`](Self::with), then bring the taskbar icon in step with the
+    /// mode, outside the borrow since that calls into TSF.
+    fn with_mode(&self, f: impl FnOnce(&mut State)) {
+        let button = self.with(|s| {
+            f(s);
+            Some((s.mode_button.clone()?, s.english))
+        });
+        if let Some(Some((button, english))) = button {
+            button.show_english(english);
+        }
+    }
+
+    /// A tap of Shift alone switches between Chinese and English.
+    fn track_up(&self, vk: u16) {
+        if is_shift(vk) {
+            self.with_mode(|s| {
+                if s.shift.release(Instant::now()) && !chord_held() {
+                    s.set_english(!s.english);
+                }
+            });
+        }
+    }
 }
 
 impl ITfTextInputProcessor_Impl for TextService_Impl {
@@ -138,7 +198,7 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
                 self.with(|s| (s.thread_mgr.take(), s.client_id, std::mem::take(&mut s.sink_cookies), s.mode_button.take()));
             if let Some((Some(tm), tid, cookies, button)) = taken {
                 if let Some(button) = button {
-                    sys::remove_langbar_item(&tm, &button);
+                    sys::remove_langbar_item(&tm, &sys::langbar_item(&button));
                 }
                 if let Ok(keystrokes) = tm.cast::<ITfKeystrokeMgr>() {
                     sys::unadvise_key_sink(&keystrokes, tid);
@@ -173,12 +233,16 @@ impl ITfTextInputProcessorEx_Impl for TextService_Impl {
 impl TextService_Impl {
     fn activate(&self, ptim: Ref<ITfThreadMgr>, tid: u32) -> Result<()> {
         let tm: ITfThreadMgr = ptim.ok()?.clone();
-        self.with(|s| {
-            s.thread_mgr = Some(tm.clone());
-            s.client_id = tid;
-            s.foreground = true;
-            s.thread_focus = true;
-        });
+        let english = self
+            .with(|s| {
+                s.thread_mgr = Some(tm.clone());
+                s.client_id = tid;
+                s.foreground = true;
+                s.thread_focus = true;
+                s.sync();
+                s.english
+            })
+            .unwrap_or(false);
         let source: ITfSource = tm.cast()?;
         let cookies = vec![
             sys::advise_sink(&source, &self.to_interface::<ITfThreadMgrEventSink>())?,
@@ -186,8 +250,8 @@ impl TextService_Impl {
         ];
         sys::advise_key_sink(&tm.cast()?, tid, &self.to_interface())?;
         // The taskbar icon is cosmetic: typing works without it.
-        let button: ITfLangBarItem = ITfLangBarItemButton::from(ModeButton::new()).into();
-        match sys::add_langbar_item(&tm, &button) {
+        let button = ModeButton::new(english);
+        match sys::add_langbar_item(&tm, &sys::langbar_item(&button)) {
             Ok(()) => {
                 self.with(|s| s.mode_button = Some(button));
             }
@@ -206,27 +270,32 @@ impl TextService_Impl {
 impl ITfKeyEventSink_Impl for TextService_Impl {
     fn OnSetFocus(&self, foreground: BOOL) -> Result<()> {
         guard(Ok(()), || {
-            self.with(|s| {
+            self.with_mode(|s| {
                 s.foreground = foreground.as_bool();
-                s.reset();
+                s.sync();
                 s.refresh();
             });
             Ok(())
         })
     }
 
-    fn OnTestKeyDown(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
+    fn OnTestKeyDown(&self, _pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
         guard(Ok(FALSE), || {
-            let eat = self.with(|s| s.decide(wparam.0 as u16).is_some());
+            let vk = wparam.0 as u16;
+            let eat = self.with(|s| {
+                s.track_down(vk, lparam);
+                s.decide(vk).is_some()
+            });
             data::debug(|| format!("OnTestKeyDown vk={:#x} -> {eat:?}", wparam.0));
             Ok(eat.unwrap_or(false).into())
         })
     }
 
-    fn OnKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
+    fn OnKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
         guard(Ok(FALSE), || {
             let vk = wparam.0 as u16;
             let step = self.with(|s| {
+                s.track_down(vk, lparam);
                 let pad = s.decide(vk)?;
                 s.eaten_down.insert(vk);
                 let commit = match pad {
@@ -261,12 +330,22 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         })
     }
 
+    // A tap of Shift switches as it is tested, since the key is not eaten and
+    // so may never be handled. The application still sees Shift go up.
     fn OnTestKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
-        guard(Ok(FALSE), || Ok(self.with(|s| s.eaten_down.contains(&(wparam.0 as u16))).unwrap_or(false).into()))
+        guard(Ok(FALSE), || {
+            let vk = wparam.0 as u16;
+            self.track_up(vk);
+            Ok(self.with(|s| s.eaten_down.contains(&vk)).unwrap_or(false).into())
+        })
     }
 
     fn OnKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
-        guard(Ok(FALSE), || Ok(self.with(|s| s.eaten_down.remove(&(wparam.0 as u16))).unwrap_or(false).into()))
+        guard(Ok(FALSE), || {
+            let vk = wparam.0 as u16;
+            self.track_up(vk);
+            Ok(self.with(|s| s.eaten_down.remove(&vk)).unwrap_or(false).into())
+        })
     }
 
     fn OnPreservedKey(&self, _pic: Ref<ITfContext>, _guid: *const GUID) -> Result<BOOL> {
@@ -286,9 +365,9 @@ impl ITfThreadMgrEventSink_Impl for TextService_Impl {
     fn OnSetFocus(&self, focus: Ref<ITfDocumentMgr>, _previous: Ref<ITfDocumentMgr>) -> Result<()> {
         guard(Ok(()), || {
             let has_focus = focus.ok().is_ok();
-            self.with(|s| {
+            self.with_mode(|s| {
                 s.doc_focus = has_focus;
-                s.reset();
+                s.sync();
                 s.refresh();
             });
             Ok(())
@@ -307,8 +386,9 @@ impl ITfThreadMgrEventSink_Impl for TextService_Impl {
 impl ITfThreadFocusSink_Impl for TextService_Impl {
     fn OnSetThreadFocus(&self) -> Result<()> {
         guard(Ok(()), || {
-            self.with(|s| {
+            self.with_mode(|s| {
                 s.thread_focus = true;
+                s.sync();
                 s.refresh();
             });
             Ok(())
@@ -320,6 +400,7 @@ impl ITfThreadFocusSink_Impl for TextService_Impl {
             self.with(|s| {
                 s.thread_focus = false;
                 s.reset();
+                s.shift.interrupt();
                 s.refresh();
             });
             Ok(())
