@@ -3,16 +3,16 @@
   Draw squareinput.ico, the icon embedded in the Windows DLL.
 
 .DESCRIPTION
-  The 3x3 grid of the macOS menu icon, white on a blue tile so that it shows
-  on light and dark taskbars alike. Each size is drawn on whole pixels, so
-  the small ones stay sharp. Sizes below 256 are stored as 32-bit bitmaps,
-  256 as PNG.
+  The 3x3 grid of the macOS menu icon, black on a white tile: on a light
+  taskbar it reads as the black grid alone, and on a dark one the tile keeps
+  it visible. Each size is drawn on whole pixels, so the small ones stay
+  sharp. Sizes below 256 are stored as 32-bit bitmaps, 256 as PNG.
 #>
 param([string]$Out = (Join-Path $PSScriptRoot 'squareinput.ico'))
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
-$blue = [Drawing.Color]::FromArgb(255, 0x1E, 0x5A, 0xB0)
+$tile = [Drawing.Color]::White
 $sizes = 16, 20, 24, 32, 40, 48, 64, 256
 
 function New-IconBitmap([int]$s) {
@@ -31,7 +31,7 @@ function New-IconBitmap([int]$s) {
     $path.AddArc($m, $m + $side - $d, $d, $d, 90, 90)
     $path.CloseFigure()
     $g.SmoothingMode = 'AntiAlias'
-    $g.FillPath([Drawing.SolidBrush]::new($blue), $path)
+    $g.FillPath([Drawing.SolidBrush]::new($tile), $path)
 
     # The grid: four lines each way, $w pixels wide and $k apart, centred.
     $w = [Math]::Max(1, [int][Math]::Floor($s / 16))
@@ -41,8 +41,8 @@ function New-IconBitmap([int]$s) {
     $g.SmoothingMode = 'None'
     for ($i = 0; $i -le 3; $i++) {
         $p = $start + $i * $k
-        $g.FillRectangle([Drawing.Brushes]::White, $p, $start, $w, $span)
-        $g.FillRectangle([Drawing.Brushes]::White, $start, $p, $span, $w)
+        $g.FillRectangle([Drawing.Brushes]::Black, $p, $start, $w, $span)
+        $g.FillRectangle([Drawing.Brushes]::Black, $start, $p, $span, $w)
     }
     $g.Dispose()
     $bmp
