@@ -91,6 +91,12 @@ pub fn paint(view: &View, digits: bool) -> Vec<Item> {
             Cell::Empty => {}
             Cell::Text(t) => text(it, t, r, if t.chars().count() > 1 { 22 } else { 34 }, Font::Han, INK, Align::Center),
             Cell::Feature(f) => text(it, FEATURES[usize::from(*f - 1)], r, 32, Font::Han, INK, Align::Center),
+            Cell::FeatureUnder { feature, text: t } => {
+                text(it, t, rect(x + 2, y + 2, CELL - 20, CELL - 20), 30, Font::Han, INK, Align::Center);
+                let corner = CELL / 3 + 2;
+                let feature_rect = rect(x + CELL - corner - 2, y + CELL - corner - 2, corner, corner);
+                text(it, FEATURES[usize::from(*feature - 1)], feature_rect, 16, Font::Han, INK, Align::Center);
+            }
             Cell::Component { feature, key } => {
                 let (glyph, examples) = COMPONENTS[usize::from(*feature - 1)][usize::from(*key - 1)];
                 text(it, glyph, rect(x, y + 2, CELL, CELL - 18), 28, Font::Han, INK, Align::Center);
@@ -169,6 +175,26 @@ mod tests {
         // Empty cells draw no text; empty hints are skipped.
         assert_eq!(t.iter().filter(|(s, _)| s.is_empty()).count(), 0);
         assert!(t.iter().any(|(s, _)| *s == "中　892　1/2 頁"));
+    }
+
+    #[test]
+    fn associated_characters_sit_top_left_over_a_small_feature() {
+        let mut v = view();
+        v.cells[6] = Cell::FeatureUnder { feature: 7, text: "港".into() };
+        let items = paint(&v, false);
+        let size_of = |s: &str| {
+            items.iter().find_map(|i| match i {
+                Item::Text { text, rect, size, .. } if text == s => Some((*rect, *size)),
+                _ => None,
+            })
+        };
+        let (char_rect, char_size) = size_of("港").unwrap();
+        let (feature_rect, feature_size) = size_of(FEATURES[6]).unwrap();
+        // Key 7 is the top-left cell.
+        assert_eq!((char_rect.x, char_rect.y), (PAD + 2, PAD + 2));
+        assert!(feature_rect.x > char_rect.x && feature_rect.y > char_rect.y);
+        assert!(feature_rect.x + feature_rect.w <= PAD + CELL && feature_rect.y + feature_rect.h <= PAD + CELL);
+        assert!(feature_size < char_size);
     }
 
     #[test]

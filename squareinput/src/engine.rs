@@ -5,7 +5,8 @@
 //! - Idle: 1-9 picks a left feature. `.` opens punctuation. `0` also opens
 //!   punctuation while nothing has been typed yet ("fresh"); afterwards it
 //!   shows the characters associated with the last one committed, or the nine
-//!   common characters if there are none.
+//!   common characters if there are none. The idle grid already shows the
+//!   first nine associated characters, each over its key's feature.
 //! - Associated characters: 1-9 commits, `0` is next page, `-` previous page.
 //!   A character picked here has associated characters of its own, so `0`
 //!   continues the word.
@@ -61,6 +62,9 @@ pub enum Cell {
     /// One of the nine features (一丨丿 / 丶乙口 / 十乂冂 on keys 7-9 / 4-6 / 1-3),
     /// drawn by the UI.
     Feature(u8),
+    /// A feature drawn small in a corner, under `text`, an associated
+    /// character that `0` then the same key commits.
+    FeatureUnder { feature: u8, text: String },
     /// Component `key` of `feature`, drawn by the UI.
     Component { feature: u8, key: u8 },
     /// More: opens the symbol menu.
@@ -240,7 +244,7 @@ impl Engine {
             (S::Idle, Digit(f @ 1..=9)) => stay(S::Feature(f)),
             (S::Idle, Digit(0)) if self.fresh => stay(S::Punctuation { page: 0 }),
             (S::Idle, Digit(0)) => match &self.last {
-                Some(of) if !self.associations.followers(of).is_empty() => stay(S::Associations { of: of.clone(), page: 0 }),
+                Some(of) if !self.associated().is_empty() => stay(S::Associations { of: of.clone(), page: 0 }),
                 _ => stay(S::Common),
             },
             (S::Idle, Dot) => stay(S::Punctuation { page: 0 }),
@@ -319,6 +323,11 @@ impl Engine {
         }
     }
 
+    /// The characters associated with the last commit; empty if none.
+    fn associated(&self) -> &[String] {
+        self.last.as_deref().map_or(&[], |of| self.associations.followers(of))
+    }
+
     fn open_code(&self, code: Code) -> State {
         if self.table.candidates(code).iter().all(Option::is_none) {
             State::NoCandidates(code)
@@ -379,13 +388,21 @@ impl Engine {
         };
         match &self.state {
             S::Idle => {
-                // COMMON_CHARS could stand here once something has been typed; the
-                // user prefers the features, which say what 1-9 will do.
-                v.cells = features;
+                // After a commit, the first page of its associated characters
+                // stands over the features, as `0` will offer them. The common
+                // characters could stand there too when there are none; the user
+                // prefers the plain features then.
+                let associated = self.associated();
+                v.cells = std::array::from_fn(|i| match associated.get(i) {
+                    Some(text) => Cell::FeatureUnder { feature: i as u8 + 1, text: text.clone() },
+                    None => Cell::Feature(i as u8 + 1),
+                });
                 v.zero_label = if self.fresh { "標　點" } else { "選　字" };
                 v.dot_label = "標點";
                 v.hints = if self.armed {
                     ["同音字：打一個字", "顯示佢嘅同音字"]
+                } else if !associated.is_empty() {
+                    ["選字形的左上方之特徵", "按０再按數字選關聯字"]
                 } else {
                     ["選字形的左上方之特徵", "按０輸入標點／檢字"]
                 };
@@ -613,6 +630,11 @@ mod tests {
     fn zero_after_a_commit_shows_its_associated_characters() {
         let mut e = engine();
         assert_eq!(type_keys(&mut e, "8922"), "快");
+        // The idle grid shows them over the features already.
+        let v = e.view();
+        assert_eq!((v.screen, v.zero_label), (Screen::Idle, "選　字"));
+        assert_eq!(v.cells[0], Cell::FeatureUnder { feature: 1, text: "樂".into() });
+        assert_eq!(v.cells[8], Cell::FeatureUnder { feature: 9, text: "活".into() });
         type_keys(&mut e, "0");
         let v = e.view();
         assert_eq!((v.screen, v.zero_label), (Screen::Associations, "下　頁"));
@@ -633,7 +655,11 @@ mod tests {
     fn associated_characters_chain_and_cancel() {
         let mut e = engine();
         assert_eq!(type_keys(&mut e, "9707"), "我");
+        // Only two associated characters: the other keys show plain features.
+        assert_eq!(e.view().cells[1], Cell::FeatureUnder { feature: 2, text: "們".into() });
+        assert_eq!(e.view().cells[2], Cell::Feature(3));
         assert_eq!(type_keys(&mut e, "01"), "哋");
+        assert_eq!(e.view().cells[0], Cell::Feature(1));
         type_keys(&mut e, "0");
         assert_eq!(e.view().screen, Screen::Common);
         type_keys(&mut e, ".");

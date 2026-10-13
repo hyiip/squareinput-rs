@@ -99,11 +99,13 @@ Everything is on the numeric keypad.
 - **Cancel:** `.` cancels whatever is being typed.
 - **Punctuation:** when nothing is being typed, `.` opens punctuation. 0 also
   opens it until something has been typed.
-- **Associated characters:** after that, 0 shows the characters that most
-  often follow the last one typed inside a word, e.g. 港 蕉 味 after 香.
-  Press 1-9 to commit one, then 0 again to go on with the word. 0 and -
-  turn the pages. A character with none, such as punctuation, shows nine
-  common characters instead.
+- **Associated characters:** after that, the grid shows the characters that
+  most often follow the last one typed inside a word, e.g. 港 蕉 味 after 香.
+  Each sits over its key's feature, which shrinks into the corner, and 1-9
+  still start a code. Press 0, then 1-9, to commit one; the grid then shows
+  the next ones, so the word can go on. On that screen 0 and - turn the
+  pages. After a character with none, such as punctuation, the grid shows
+  just the features and 0 offers nine common characters.
 - **More menu:** on punctuation page 1, key 9 opens it. 2 arms homophones:
   the next character you pick shows its homophones instead. 4-9 open the
   symbol lists.
