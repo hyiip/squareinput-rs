@@ -218,11 +218,11 @@ dependencies = [
 
 [[package]]
 name = "squareinput"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "squareinput-imk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "objc2",
  "objc2-app-kit",
@@ -234,7 +234,7 @@ dependencies = [
 
 [[package]]
 name = "squareinput-tsf"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "squareinput",
  "windows",
