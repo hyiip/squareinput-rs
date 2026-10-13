@@ -1,5 +1,6 @@
 # Byte-exact: a PDF's xref holds byte offsets.
 *.pdf binary
+*.ico binary
 # Shell scripts run on macOS and Linux.
 *.sh text eol=lf
 # cmd.exe misreads batch files with LF line ends.

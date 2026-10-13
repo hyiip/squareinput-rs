@@ -28,3 +28,6 @@ features = [
     "Win32_UI_TextServices",
     "Win32_UI_WindowsAndMessaging",
 ]
+
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3.0.12"

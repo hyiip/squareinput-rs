@@ -1,16 +1,18 @@
 //! The only module allowed `unsafe`. The rest of the crate is compiled with
 //! `#![deny(unsafe_code)]`, so this file is the whole of what needs auditing.
 //!
-//! It holds three things:
+//! It holds four things:
 //! - the COM object declarations, because `#[implement]` expands to unsafe
 //!   code (their methods live in safe modules: `service.rs`);
+//! - the input mode button, whole, as TSF hands its methods raw pointers;
 //! - the DLL exports, where COM hands us raw pointers;
 //! - thin safe wrappers for every Windows API the crate calls.
 //!
 //! Safe wrappers never take a raw pointer from their caller: arguments are
 //! owned Rust values, COM interface references, or window handles (which
-//! Windows validates itself). Raw pointers appear only in the two COM entry
-//! points, where COM supplies them and they are checked for null first.
+//! Windows validates itself). Raw pointers appear only in COM entry points
+//! (the class factory, `DllGetClassObject` and the input mode button), where
+//! COM supplies them and they are checked for null first.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -25,6 +27,7 @@ use windows::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleFileNameW,
     GetModuleHandleExW,
 };
+use windows::Win32::System::Ole::{CONNECT_E_ADVISELIMIT, CONNECT_E_CANNOTCONNECT, CONNECT_E_NOCONNECTION};
 use windows::Win32::System::Registry::*;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, HKL, VIRTUAL_KEY};
@@ -32,7 +35,7 @@ use windows::Win32::UI::TextServices::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
-use crate::{CLSID_TEXT_SERVICE, data, guard};
+use crate::{CLSID_TEXT_SERVICE, DESCRIPTION, data, guard};
 
 // ---- COM objects --------------------------------------------------------
 
@@ -71,6 +74,123 @@ impl IClassFactory_Impl for Factory_Impl {
 
     fn LockServer(&self, _lock: BOOL) -> Result<()> {
         Ok(())
+    }
+}
+
+// ---- Input mode button ------------------------------------------------------
+
+/// Resource id of the icon that build.rs embeds.
+const ICON_ID: usize = 1;
+
+/// The only cookie [`ModeButton`] hands out: it takes a single sink.
+const SINK_COOKIE: u32 = 1;
+
+/// The input mode button: TSF shows its icon on the taskbar while we are the
+/// active text service. It only shows the icon; clicking it does nothing.
+#[implement(ITfLangBarItemButton, ITfSource)]
+pub struct ModeButton {
+    sink: RefCell<Option<ITfLangBarItemSink>>,
+}
+
+impl ModeButton {
+    pub fn new() -> ModeButton {
+        ModeButton { sink: RefCell::default() }
+    }
+}
+
+impl ITfLangBarItem_Impl for ModeButton_Impl {
+    fn GetInfo(&self, info: *mut TF_LANGBARITEMINFO) -> Result<()> {
+        guard(Err(E_UNEXPECTED.into()), || {
+            if info.is_null() {
+                return Err(E_INVALIDARG.into());
+            }
+            let mut description = [0u16; 32];
+            for (d, s) in description.iter_mut().zip(DESCRIPTION.encode_utf16().take(31)) {
+                *d = s;
+            }
+            // SAFETY: TSF passes a valid out-pointer; it is non-null.
+            unsafe {
+                *info = TF_LANGBARITEMINFO {
+                    clsidService: CLSID_TEXT_SERVICE,
+                    guidItem: GUID_LBI_INPUTMODE,
+                    dwStyle: TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_SHOWNINTRAY,
+                    ulSort: 0,
+                    szDescription: description,
+                };
+            }
+            Ok(())
+        })
+    }
+
+    fn GetStatus(&self) -> Result<u32> {
+        Ok(0)
+    }
+
+    fn Show(&self, _show: BOOL) -> Result<()> {
+        Ok(())
+    }
+
+    fn GetTooltipString(&self) -> Result<BSTR> {
+        Ok(BSTR::from(DESCRIPTION))
+    }
+}
+
+impl ITfLangBarItemButton_Impl for ModeButton_Impl {
+    fn OnClick(&self, _click: TfLBIClick, _point: &POINT, _area: *const RECT) -> Result<()> {
+        Ok(())
+    }
+
+    fn InitMenu(&self, _menu: Ref<ITfMenu>) -> Result<()> {
+        Ok(())
+    }
+
+    fn OnMenuSelect(&self, _id: u32) -> Result<()> {
+        Ok(())
+    }
+
+    /// TSF destroys the icon when it is done with it, so each call loads a new one.
+    fn GetIcon(&self) -> Result<HICON> {
+        guard(Err(E_UNEXPECTED.into()), || {
+            let size = unsafe { GetSystemMetrics(SM_CXSMICON) };
+            let name = PCWSTR(std::ptr::without_provenance(ICON_ID));
+            let icon = unsafe { LoadImageW(Some(module().into()), name, IMAGE_ICON, size, size, LR_DEFAULTCOLOR) }?;
+            Ok(HICON(icon.0))
+        })
+    }
+
+    fn GetText(&self) -> Result<BSTR> {
+        Ok(BSTR::from(DESCRIPTION))
+    }
+}
+
+impl ITfSource_Impl for ModeButton_Impl {
+    fn AdviseSink(&self, iid: *const GUID, sink: Ref<IUnknown>) -> Result<u32> {
+        guard(Err(E_UNEXPECTED.into()), || {
+            if iid.is_null() {
+                return Err(E_INVALIDARG.into());
+            }
+            // SAFETY: TSF passes a valid IID pointer; it is non-null.
+            if unsafe { *iid } != ITfLangBarItemSink::IID {
+                return Err(CONNECT_E_CANNOTCONNECT.into());
+            }
+            let sink: ITfLangBarItemSink = sink.ok()?.cast()?;
+            let mut slot = self.sink.try_borrow_mut().map_err(|_| Error::from(E_UNEXPECTED))?;
+            if slot.is_some() {
+                return Err(CONNECT_E_ADVISELIMIT.into());
+            }
+            *slot = Some(sink);
+            Ok(SINK_COOKIE)
+        })
+    }
+
+    fn UnadviseSink(&self, cookie: u32) -> Result<()> {
+        guard(Err(E_UNEXPECTED.into()), || {
+            let mut slot = self.sink.try_borrow_mut().map_err(|_| Error::from(E_UNEXPECTED))?;
+            if cookie != SINK_COOKIE || slot.take().is_none() {
+                return Err(CONNECT_E_NOCONNECTION.into());
+            }
+            Ok(())
+        })
     }
 }
 
@@ -245,6 +365,18 @@ pub fn advise_key_sink(keystrokes: &ITfKeystrokeMgr, client_id: u32, sink: &ITfK
 
 pub fn unadvise_key_sink(keystrokes: &ITfKeystrokeMgr, client_id: u32) {
     let _ = unsafe { keystrokes.UnadviseKeyEventSink(client_id) };
+}
+
+/// Show `item` (on the taskbar) while this thread's text service is active.
+pub fn add_langbar_item(thread_mgr: &ITfThreadMgr, item: &ITfLangBarItem) -> Result<()> {
+    let items: ITfLangBarItemMgr = thread_mgr.cast()?;
+    unsafe { items.AddItem(item) }
+}
+
+pub fn remove_langbar_item(thread_mgr: &ITfThreadMgr, item: &ITfLangBarItem) {
+    if let Ok(items) = thread_mgr.cast::<ITfLangBarItemMgr>() {
+        let _ = unsafe { items.RemoveItem(item) };
+    }
 }
 
 /// Whether a document of this thread has TSF focus.

@@ -16,7 +16,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::TextServices::*;
 use windows::core::*;
 
-use crate::sys::{self, CommitSession, CommitSession_Impl, TextService, TextService_Impl};
+use crate::sys::{self, CommitSession, CommitSession_Impl, ModeButton, TextService, TextService_Impl};
 use crate::window::{CandidateWindow, Content};
 use crate::{data, guard};
 
@@ -51,6 +51,8 @@ pub(crate) struct State {
     thread_mgr: Option<ITfThreadMgr>,
     client_id: u32,
     sink_cookies: Vec<u32>,
+    /// The input mode button, added to the language bar while active.
+    mode_button: Option<ITfLangBarItem>,
     /// Created on first use; stays None (inert) if the data cannot be loaded.
     engine: Option<Engine>,
     engine_failed: bool,
@@ -132,8 +134,12 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
 
     fn Deactivate(&self) -> Result<()> {
         guard(Ok(()), || {
-            let taken = self.with(|s| (s.thread_mgr.take(), s.client_id, std::mem::take(&mut s.sink_cookies)));
-            if let Some((Some(tm), tid, cookies)) = taken {
+            let taken =
+                self.with(|s| (s.thread_mgr.take(), s.client_id, std::mem::take(&mut s.sink_cookies), s.mode_button.take()));
+            if let Some((Some(tm), tid, cookies, button)) = taken {
+                if let Some(button) = button {
+                    sys::remove_langbar_item(&tm, &button);
+                }
                 if let Ok(keystrokes) = tm.cast::<ITfKeystrokeMgr>() {
                     sys::unadvise_key_sink(&keystrokes, tid);
                 }
@@ -179,6 +185,14 @@ impl TextService_Impl {
             sys::advise_sink(&source, &self.to_interface::<ITfThreadFocusSink>())?,
         ];
         sys::advise_key_sink(&tm.cast()?, tid, &self.to_interface())?;
+        // The taskbar icon is cosmetic: typing works without it.
+        let button: ITfLangBarItem = ITfLangBarItemButton::from(ModeButton::new()).into();
+        match sys::add_langbar_item(&tm, &button) {
+            Ok(()) => {
+                self.with(|s| s.mode_button = Some(button));
+            }
+            Err(e) => data::log(&format!("cannot add the input mode button: {e}")),
+        }
         let doc_focus = sys::has_focus_document(&tm);
         self.with(|s| {
             s.sink_cookies = cookies;
